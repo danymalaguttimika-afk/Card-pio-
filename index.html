@@ -59,6 +59,8 @@
       const [view, setView] = useState('menu');
       const [products, setProducts] = useState([]);
       const [orders, setOrders] = useState([]);
+      const [cashRegisters, setCashRegisters] = useState([]); // Histórico de caixas fechados
+      const [currentCash, setCurrentCash] = useState(null); // Caixa aberto atualmente
       
       const [deliveryFee, setDeliveryFee] = useState(5.00);
       const [pixKeyConfig, setPixKeyConfig] = useState("11999999999 (Chave Pix Exemplo)");
@@ -88,16 +90,14 @@
       const [newProduct, setNewProduct] = useState({ name: '', price: '', category: '', description: '', imageUrl: '' });
       const [feeInput, setFeeInput] = useState("5.00");
       const [pixInput, setPixInput] = useState("11999999999");
+      const [openingChangeInput, setOpeningChangeInput] = useState("0.00");
       
       const [newAddonName, setNewAddonName] = useState("");
       const [newAddonPrice, setNewAddonPrice] = useState("");
 
       useEffect(() => {
         const { db, collection, onSnapshot, doc } = window.firebaseAPI;
-        if (!db) {
-          setLoading(false);
-          return;
-        }
+        if (!db) { setLoading(false); return; }
 
         const unsubProducts = onSnapshot(collection(db, 'products'), (snap) => {
           setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -110,6 +110,15 @@
           setOrders(ords);
           setLoading(false);
         }, (err) => { console.error(err); setLoading(false); });
+
+        // Sincroniza o Caixa Atual e Histórico de Caixas
+        const unsubCash = onSnapshot(collection(db, 'cash_registers'), (snap) => {
+          const cashList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          cashList.sort((a, b) => b.openedAt - a.openedAt);
+          setCashRegisters(cashList);
+          const active = cashList.find(c => c.status === 'aberto');
+          setCurrentCash(active || null);
+        }, (err) => console.error(err));
 
         const unsubConfig = onSnapshot(doc(db, 'settings', 'config'), (docSnap) => {
           if (docSnap.exists()) {
@@ -133,13 +142,10 @@
           setAddons(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         }, (err) => console.error(err));
 
-        // Garantia absoluta: se por acaso o banco demorar mais de 1.5s, força a abertura da tela
-        const timer = setTimeout(() => {
-          setLoading(false);
-        }, 1500);
+        const timer = setTimeout(() => { setLoading(false); }, 1500);
 
         return () => {
-          unsubProducts(); unsubOrders(); unsubConfig(); unsubCats(); unsubAddons();
+          unsubProducts(); unsubOrders(); unsubCash(); unsubConfig(); unsubCats(); unsubAddons();
           clearTimeout(timer);
         };
       }, []);
@@ -151,6 +157,52 @@
         } else if (senha !== null) {
           alert("Senha incorreta! Acesso negado.");
         }
+      };
+
+      const handleOpenCash = async (e) => {
+        e.preventDefault();
+        const change = parseFloat(openingChangeInput);
+        if (isNaN(change) || change < 0) return alert("Digite um valor de troco válido.");
+
+        try {
+          const { db, collection, addDoc } = window.firebaseAPI;
+          await addDoc(collection(db, 'cash_registers'), {
+            status: 'aberto',
+            openingChange: change,
+            openedAt: Date.now(),
+            closedAt: null,
+            totalSales: 0,
+            pixSales: 0,
+            cardSales: 0,
+            cashSales: 0
+          });
+          alert("Caixa aberto com sucesso!");
+        } catch (error) { alert("Erro ao abrir caixa."); }
+      };
+
+      const handleCloseCash = async () => {
+        if (!currentCash) return;
+        if (!window.confirm("Deseja realmente fechar o caixa do dia?")) return;
+
+        // Calcula os totais com base nos pedidos realizados a partir do momento da abertura do caixa
+        const sessionOrders = orders.filter(o => o.createdAt >= currentCash.openedAt);
+        const totalSales = sessionOrders.reduce((acc, o) => acc + (o.total || 0), 0);
+        const pixSales = sessionOrders.filter(o => o.paymentMethod === 'Pix').reduce((acc, o) => acc + (o.total || 0), 0);
+        const cardSales = sessionOrders.filter(o => o.paymentMethod === 'Cartão').reduce((acc, o) => acc + (o.total || 0), 0);
+        const cashSales = sessionOrders.filter(o => o.paymentMethod === 'Dinheiro').reduce((acc, o) => acc + (o.total || 0), 0);
+
+        try {
+          const { db, doc, updateDoc } = window.firebaseAPI;
+          await updateDoc(doc(db, 'cash_registers', currentCash.id), {
+            status: 'fechado',
+            closedAt: Date.now(),
+            totalSales,
+            pixSales,
+            cardSales,
+            cashSales
+          });
+          alert("Caixa fechado com sucesso!");
+        } catch (error) { alert("Erro ao fechar caixa."); }
       };
 
       const handleSaveConfig = async (e) => {
@@ -433,13 +485,20 @@
       const filteredProducts = (activeCategory === 'Todos' ? products : products.filter(p => p.category === activeCategory))
         .filter(p => !p.paused);
 
-      const totalRevenue = orders.reduce((acc, o) => acc + (o.total || 0), 0);
-      const pixRevenue = orders.filter(o => o.paymentMethod === 'Pix').reduce((acc, o) => acc + (o.total || 0), 0);
-      const cardRevenue = orders.filter(o => o.paymentMethod === 'Cartão').reduce((acc, o) => acc + (o.total || 0), 0);
-      const cashRevenue = orders.filter(o => o.paymentMethod === 'Dinheiro').reduce((acc, o) => acc + (o.total || 0), 0);
+      // Pedidos realizados durante a sessão do caixa aberto atual
+      const activeSessionOrders = currentCash ? orders.filter(o => o.createdAt >= currentCash.openedAt) : [];
+      const sessionTotal = activeSessionOrders.reduce((acc, o) => acc + (o.total || 0), 0);
+      const sessionPix = activeSessionOrders.filter(o => o.paymentMethod === 'Pix').reduce((acc, o) => acc + (o.total || 0), 0);
+      const sessionCard = activeSessionOrders.filter(o => o.paymentMethod === 'Cartão').reduce((acc, o) => acc + (o.total || 0), 0);
+      const sessionCash = activeSessionOrders.filter(o => o.paymentMethod === 'Dinheiro').reduce((acc, o) => acc + (o.total || 0), 0);
+      const expectedCashInDrawer = (currentCash?.openingChange || 0) + sessionCash;
+
+      // Cálculo de Faturamento Mensal com base nos caixas fechados
+      const closedCashRegisters = cashRegisters.filter(c => c.status === 'fechado');
+      const monthlyRevenue = closedCashRegisters.reduce((acc, c) => acc + (c.totalSales || 0), 0);
 
       const productSalesCount = {};
-      orders.forEach(o => {
+      activeSessionOrders.forEach(o => {
         if (o.items) {
           o.items.forEach(item => {
             productSalesCount[item.name] = (productSalesCount[item.name] || 0) + item.quantity;
@@ -804,43 +863,115 @@
                   </div>
                 )}
 
+                {/* Nova Aba de Caixa Avançado com Abertura/Fechamento, Troco e Fechamento do Mês */}
                 {pdvTab === 'cash' && (
                   <div className="p-4 space-y-4">
-                    <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200">
-                      <h3 className="font-black text-xl mb-4">💰 Fechamento de Caixa</h3>
-                      
-                      <div className="bg-zinc-900 text-white p-5 rounded-2xl mb-6 shadow-md">
-                        <span className="text-xs text-zinc-400 uppercase font-bold tracking-wider">Faturamento Total do Dia</span>
-                        <h2 className="text-3xl font-black text-amber-500 mt-1">R$ {totalRevenue.toFixed(2)}</h2>
-                        <p className="text-xs text-zinc-400 mt-1">{orders.length} pedidos realizados</p>
-                      </div>
+                    {!currentCash ? (
+                      /* Caixa Fechado - Opção de Abrir */
+                      <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200 space-y-4">
+                        <div className="text-center py-4">
+                          <span className="text-4xl">🔒</span>
+                          <h3 className="font-black text-xl mt-2">O Caixa está Fechado</h3>
+                          <p className="text-xs text-zinc-500 mt-1">Abra o caixa informando o troco inicial para começar a registrar as vendas.</p>
+                        </div>
 
-                      <div className="grid grid-cols-3 gap-2 mb-6">
-                        <div className="bg-zinc-50 p-3 rounded-2xl border border-zinc-200 text-center">
-                          <span className="text-[10px] font-bold text-zinc-500 uppercase">Pix</span>
-                          <p className="text-sm font-black text-zinc-900 mt-1">R$ {pixRevenue.toFixed(2)}</p>
-                        </div>
-                        <div className="bg-zinc-50 p-3 rounded-2xl border border-zinc-200 text-center">
-                          <span className="text-[10px] font-bold text-zinc-500 uppercase">Cartão</span>
-                          <p className="text-sm font-black text-zinc-900 mt-1">R$ {cardRevenue.toFixed(2)}</p>
-                        </div>
-                        <div className="bg-zinc-50 p-3 rounded-2xl border border-zinc-200 text-center">
-                          <span className="text-[10px] font-bold text-zinc-500 uppercase">Dinheiro</span>
-                          <p className="text-sm font-black text-zinc-900 mt-1">R$ {cashRevenue.toFixed(2)}</p>
-                        </div>
-                      </div>
-
-                      <h4 className="font-bold text-sm uppercase text-zinc-600 mb-2">Produtos mais vendidos:</h4>
-                      <div className="space-y-2">
-                        {Object.entries(productSalesCount).map(([prodName, qty]) => (
-                          <div key={prodName} className="flex justify-between items-center bg-zinc-50 px-4 py-2.5 rounded-xl border border-zinc-200 text-sm">
-                            <span className="font-medium text-zinc-800">{prodName}</span>
-                            <span className="font-black bg-zinc-200 px-2.5 py-0.5 rounded-full text-xs">{qty} un</span>
+                        <form onSubmit={handleOpenCash} className="space-y-4">
+                          <div>
+                            <label className="block text-xs font-bold text-zinc-600 uppercase mb-1">Troco Inicial (Fundo de Caixa em Dinheiro)</label>
+                            <input 
+                              type="number" 
+                              step="0.50" 
+                              value={openingChangeInput} 
+                              onChange={(e) => setOpeningChangeInput(e.target.value)} 
+                              className="w-full bg-zinc-50 border border-zinc-300 rounded-2xl px-4 py-3 font-black text-lg text-center" 
+                              placeholder="Ex: 50.00" 
+                              required 
+                            />
                           </div>
-                        ))}
-                        {Object.keys(productSalesCount).length === 0 && <p className="text-xs text-zinc-400 text-center py-4">Nenhuma venda registrada.</p>}
+                          <button type="submit" className="w-full bg-[#25D366] text-white font-black py-4 rounded-2xl shadow-md text-base">
+                            🔓 Abrir Caixa Agora
+                          </button>
+                        </form>
+
+                        {/* Histórico e Fechamento do Mês */}
+                        <div className="pt-6 border-t border-zinc-200">
+                          <div className="bg-zinc-900 text-white p-4 rounded-2xl mb-4">
+                            <span className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">Faturamento Acumulado (Mês)</span>
+                            <h2 className="text-2xl font-black text-amber-500 mt-0.5">R$ {monthlyRevenue.toFixed(2)}</h2>
+                            <p className="text-[11px] text-zinc-400">{closedCashRegisters.length} caixas fechados registrados</p>
+                          </div>
+
+                          <h4 className="font-bold text-xs uppercase text-zinc-500 mb-2">Histórico de Caixas Fechados:</h4>
+                          <div className="space-y-2 max-h-48 overflow-y-auto">
+                            {closedCashRegisters.map(c => (
+                              <div key={c.id} className="bg-zinc-50 p-3 rounded-xl border border-zinc-200 flex justify-between items-center text-xs">
+                                <div>
+                                  <p className="font-bold">{new Date(c.openedAt).toLocaleDateString('pt-BR')}</p>
+                                  <span className="text-zinc-500">Troco: R$ {c.openingChange.toFixed(2)}</span>
+                                </div>
+                                <span className="font-black text-amber-600">R$ {(c.totalSales || 0).toFixed(2)}</span>
+                              </div>
+                            ))}
+                            {closedCashRegisters.length === 0 && <p className="text-xs text-zinc-400 text-center py-2">Nenhum histórico anterior.</p>}
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      /* Caixa Aberto - Painel do Dia */
+                      <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200 space-y-4">
+                        <div className="flex justify-between items-center bg-green-50 border border-green-200 p-3 rounded-2xl">
+                          <div className="flex items-center gap-2">
+                            <span className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></span>
+                            <span className="font-black text-xs text-green-800 uppercase">Caixa Aberto</span>
+                          </div>
+                          <span className="text-xs text-green-700 font-bold">{new Date(currentCash.openedAt).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</span>
+                        </div>
+
+                        <div className="bg-zinc-900 text-white p-5 rounded-2xl shadow-md space-y-1">
+                          <span className="text-xs text-zinc-400 uppercase font-bold tracking-wider">Faturamento da Sessão Atual</span>
+                          <h2 className="text-3xl font-black text-amber-500">R$ {sessionTotal.toFixed(2)}</h2>
+                          <p className="text-xs text-zinc-400">{activeSessionOrders.length} pedidos realizados hoje</p>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2">
+                          <div className="bg-zinc-50 p-3 rounded-2xl border border-zinc-200 text-center">
+                            <span className="text-[10px] font-bold text-zinc-500 uppercase">Pix</span>
+                            <p className="text-sm font-black text-zinc-900 mt-1">R$ {sessionPix.toFixed(2)}</p>
+                          </div>
+                          <div className="bg-zinc-50 p-3 rounded-2xl border border-zinc-200 text-center">
+                            <span className="text-[10px] font-bold text-zinc-500 uppercase">Cartão</span>
+                            <p className="text-sm font-black text-zinc-900 mt-1">R$ {sessionCard.toFixed(2)}</p>
+                          </div>
+                          <div className="bg-zinc-50 p-3 rounded-2xl border border-zinc-200 text-center">
+                            <span className="text-[10px] font-bold text-zinc-500 uppercase">Dinheiro</span>
+                            <p className="text-sm font-black text-zinc-900 mt-1">R$ {sessionCash.toFixed(2)}</p>
+                          </div>
+                        </div>
+
+                        <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-200 space-y-1 text-xs">
+                          <div className="flex justify-between"><span>Troco Inicial (Fundo):</span> <span className="font-bold">R$ {currentCash.openingChange.toFixed(2)}</span></div>
+                          <div className="flex justify-between"><span>Dinheiro em Vendas:</span> <span className="font-bold">R$ {sessionCash.toFixed(2)}</span></div>
+                          <div className="flex justify-between font-black text-sm text-zinc-900 pt-1 border-t border-zinc-200">
+                            <span>Total Esperado na Gaveta:</span> <span className="text-amber-600">R$ {expectedCashInDrawer.toFixed(2)}</span>
+                          </div>
+                        </div>
+
+                        <h4 className="font-bold text-sm uppercase text-zinc-600 pt-2">Produtos vendidos hoje:</h4>
+                        <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                          {Object.entries(productSalesCount).map(([prodName, qty]) => (
+                            <div key={prodName} className="flex justify-between items-center bg-zinc-50 px-3 py-2 rounded-xl border border-zinc-200 text-xs">
+                              <span className="font-medium text-zinc-800">{prodName}</span>
+                              <span className="font-black bg-zinc-200 px-2 py-0.5 rounded-full">{qty} un</span>
+                            </div>
+                          ))}
+                          {Object.keys(productSalesCount).length === 0 && <p className="text-xs text-zinc-400 text-center py-2">Nenhuma venda nesta sessão.</p>}
+                        </div>
+
+                        <button onClick={handleCloseCash} className="w-full bg-red-600 text-white font-black py-4 rounded-2xl shadow-md text-sm mt-4">
+                          🔒 Fechar Caixa do Dia
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
