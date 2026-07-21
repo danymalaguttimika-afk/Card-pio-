@@ -83,6 +83,9 @@
       const [neighborhood, setNeighborhood] = useState("");
       const [reference, setReference] = useState("");
       
+      // Estado da nova tela de sucesso do pedido
+      const [orderSuccess, setOrderSuccess] = useState(null);
+
       const [activeCategory, setActiveCategory] = useState("Todos");
       const [pdvTab, setPdvTab] = useState('orders');
       const [orderFilter, setOrderFilter] = useState('pendente');
@@ -102,7 +105,6 @@
       const [leadFilter, setLeadFilter] = useState('all');
       const [promoTemplate, setPromoTemplate] = useState("Olá [Nome]! Tudo bem? Passando para avisar que hoje o cardápio da Malaguti Brothers está recheado de delícias. Que tal pedir seu lanche favorito agora? 🍔🔥");
 
-      // Estados para Filtro de Período na Análise
       const [analysisStartDate, setAnalysisStartDate] = useState("");
       const [analysisEndDate, setAnalysisEndDate] = useState("");
 
@@ -412,40 +414,30 @@
         let addressText = `${street}, ${number} - ${neighborhood}`;
         if (reference.trim()) addressText += ` (Ref: ${reference})`;
 
-        let text = `*Novo Pedido - Malaguti Brothers*\n\n*Cliente:* ${customerName}\n*Telefone:* ${customerPhone}\n*Endereço:* ${addressText}\n*Pagamento:* ${paymentMethod}\n\n*Itens:*\n`;
-        
-        cart.forEach(item => {
-          text += `${item.quantity}x ${item.name} - R$ ${(item.price * item.quantity).toFixed(2)}`;
-          if (item.addons && item.addons.length > 0) {
-            text += `\n   _Adicionais: ${item.addons.map(a => a.name).join(', ')}_`;
-          }
-          if (item.note) {
-            text += `\n   _Obs: ${item.note}_`;
-          }
-          text += `\n`;
-        });
-
-        text += `\nSubtotal: R$ ${itemsTotal.toFixed(2)}`;
-        text += `\nTaxa de Entrega: R$ ${deliveryFee.toFixed(2)}`;
-        text += `\n*Total Geral:* R$ ${cartTotal.toFixed(2)}`;
-        
-        if (paymentMethod === 'Pix') {
-          text += `\n\n_⚡ Pagamento via Pix selecionado. Segue o comprovante em anexo._`;
-        }
-
         try {
           const { db, collection, addDoc } = window.firebaseAPI;
+          // Salva no banco de dados do PDV
           await addDoc(collection(db, 'orders'), {
             customerName, customerPhone, customerAddress: addressText, 
             items: cart, subtotal: itemsTotal, deliveryFee: deliveryFee, total: cartTotal, 
             paymentMethod: paymentMethod, phone: WHATSAPP_NUMBER, status: 'pendente', source: 'whatsapp', createdAt: Date.now()
           });
-          const waUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
-          window.open(waUrl, '_blank');
           
-          setCart([]); setIsCartOpen(false); 
-          setCustomerName(""); setCustomerPhone(""); 
-          setStreet(""); setNumber(""); setNeighborhood(""); setReference("");
+          // Abre a tela de SUCESSO (fechando o carrinho e não enviando pro zap automaticamente)
+          setOrderSuccess({
+            customerName,
+            paymentMethod,
+            total: cartTotal
+          });
+
+          setCart([]); 
+          setIsCartOpen(false); 
+          setCustomerName(""); 
+          setCustomerPhone(""); 
+          setStreet(""); 
+          setNumber(""); 
+          setNeighborhood(""); 
+          setReference("");
         } catch (error) { alert("Erro ao gerar pedido."); }
       };
 
@@ -594,7 +586,6 @@
       const closedCashRegisters = cashRegisters.filter(c => c.status === 'fechado');
       const monthlyRevenue = closedCashRegisters.reduce((acc, c) => acc + (c.totalSales || 0), 0);
 
-      // Filtragem de Pedidos para Análise com base no Período Selecionado
       const filteredOrdersForAnalysis = orders.filter(o => {
         if (!analysisStartDate && !analysisEndDate) return true;
         const orderDateStr = new Date(o.createdAt).toISOString().split('T')[0];
@@ -684,6 +675,43 @@
             <button onClick={() => setView('menu')} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-colors ${view === 'menu' ? 'bg-amber-500 text-black' : 'text-zinc-400'}`}>Cardápio</button>
             <button onClick={handlePdvAccess} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-colors ${view === 'pdv' ? 'bg-amber-500 text-black' : 'text-zinc-400'}`}>PDV 🔒</button>
           </div>
+
+          {/* Tela de Sucesso de Pedido (Modal Final) */}
+          {orderSuccess && (
+             <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+                 <div className="bg-zinc-900 rounded-[2.5rem] p-8 max-w-sm w-full text-center border border-zinc-800 shadow-2xl relative overflow-hidden">
+                     <div className="w-20 h-20 bg-green-500/20 text-green-500 rounded-full flex items-center justify-center text-4xl mx-auto mb-5 shadow-[0_0_20px_rgba(34,197,94,0.3)]">
+                         ✓
+                     </div>
+                     <h2 className="text-2xl font-black text-white mb-2 tracking-tight">Pedido Recebido! 🎉</h2>
+                     <p className="text-zinc-400 text-sm mb-6 leading-relaxed">
+                         Olá <strong>{orderSuccess.customerName}</strong>, seu pedido já está no nosso sistema e será preparado o mais breve possível. Obrigado pela oportunidade de servi-lo!
+                     </p>
+
+                     {orderSuccess.paymentMethod === 'Pix' ? (
+                         <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 mb-6">
+                             <p className="text-amber-500 text-xs font-black uppercase mb-2">⚠️ Falta só um detalhe!</p>
+                             <p className="text-zinc-300 text-xs mb-4">Como você escolheu Pix, envie o comprovante no nosso WhatsApp para a cozinha iniciar o preparo.</p>
+                             <a 
+                                href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(`Olá, sou ${orderSuccess.customerName} e acabei de fazer um pedido no site. Segue meu comprovante Pix no valor de R$ ${orderSuccess.total.toFixed(2)}!`)}`} 
+                                target="_blank" 
+                                className="flex items-center justify-center gap-2 w-full bg-[#25D366] text-white py-3.5 rounded-xl font-black text-sm shadow-md"
+                             >
+                                 📲 Enviar Comprovante
+                             </a>
+                         </div>
+                     ) : (
+                         <div className="bg-zinc-950 rounded-2xl p-4 mb-6 border border-zinc-800 text-xs text-zinc-400">
+                             Fique de olho no seu celular. Qualquer dúvida, o nosso entregador ou a nossa equipe entrará em contato.
+                         </div>
+                     )}
+
+                     <button onClick={() => setOrderSuccess(null)} className="w-full bg-zinc-800 hover:bg-zinc-700 text-white py-3.5 rounded-xl font-bold text-sm transition-colors">
+                         Voltar ao Cardápio
+                     </button>
+                 </div>
+             </div>
+          )}
 
           {view === 'menu' && (
             <div className="w-full max-w-md mx-auto relative bg-zinc-950 min-h-screen shadow-2xl">
@@ -875,7 +903,7 @@
                           </div>
                         </div>
 
-                        {/* Se escolher Pix, exibe a Chave Pix Copia e Cola e o pedido de comprovante */}
+                        {/* Se escolher Pix, exibe a Chave Pix Copia e Cola instantânea */}
                         {paymentMethod === 'Pix' && (
                           <div className="bg-zinc-950 p-4 rounded-2xl border border-amber-500/50 space-y-3 mt-3">
                             <div className="flex items-center justify-between">
@@ -895,7 +923,7 @@
                               📋 Copiar Chave Pix
                             </button>
                             <p className="text-[11px] text-amber-200/90 text-center leading-tight">
-                              Faça o Pix de <strong>R$ {cartTotal.toFixed(2)}</strong> e <strong>envie o comprovante por foto aqui no chat</strong> após enviar o pedido!
+                              Copie a chave e faça o pagamento. Vamos te pedir o comprovante após clicar em Enviar Pedido!
                             </p>
                           </div>
                         )}
@@ -1067,6 +1095,7 @@
                   </div>
                 )}
 
+                {/* Aba de Caixa */}
                 {pdvTab === 'cash' && (
                   <div className="p-4 space-y-4">
                     {!currentCash ? (
@@ -1201,17 +1230,6 @@
                           )}
                         </div>
 
-                        <h4 className="font-bold text-sm uppercase text-zinc-600 pt-2">Produtos vendidos hoje:</h4>
-                        <div className="space-y-1.5 max-h-36 overflow-y-auto">
-                          {Object.entries(productSalesCount).map(([prodName, qty]) => (
-                            <div key={prodName} className="flex justify-between items-center bg-zinc-50 px-3 py-2 rounded-xl border border-zinc-200 text-xs">
-                              <span className="font-medium text-zinc-800">{prodName}</span>
-                              <span className="font-black bg-zinc-200 px-2 py-0.5 rounded-full">{qty} un</span>
-                            </div>
-                          ))}
-                          {Object.keys(productSalesCount).length === 0 && <p className="text-xs text-zinc-400 text-center py-2">Nenhuma venda nesta sessão.</p>}
-                        </div>
-
                         <button onClick={handleCloseCash} className="w-full bg-red-600 text-white font-black py-4 rounded-2xl shadow-md text-sm mt-4">
                           🔒 Fechar Caixa do Dia
                         </button>
@@ -1223,7 +1241,6 @@
                 {/* Aba de Análise com Filtro por Período Personalizado */}
                 {pdvTab === 'reports' && (
                   <div className="p-4 space-y-6">
-                    {/* Filtro de Período */}
                     <div className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-200 space-y-3">
                       <h3 className="font-black text-base flex items-center gap-2">📅 Filtrar por Período</h3>
                       <p className="text-xs text-zinc-500">Selecione a data inicial e final para analisar o desempenho do período desejado.</p>
@@ -1265,9 +1282,8 @@
                       </div>
                     </div>
 
-                    {/* Ranking de Produtos no Período */}
                     <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200 space-y-3">
-                      <h3 className="font-black text-base flex items-center gap-2">🏆 Ranking de Produtos (Período)</h3>
+                      <h3 className="font-black text-base flex items-center gap-2">🏆 Ranking de Produtos</h3>
                       
                       <div className="space-y-2 mt-2 max-h-60 overflow-y-auto">
                         {sortedGlobalProducts.map(([name, stats], idx) => (
@@ -1288,7 +1304,6 @@
                       </div>
                     </div>
 
-                    {/* Desempenho por Categoria no Período */}
                     <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200 space-y-3">
                       <h3 className="font-black text-base flex items-center gap-2">📊 Desempenho por Categoria</h3>
                       
@@ -1306,7 +1321,6 @@
                       </div>
                     </div>
 
-                    {/* Sazonalidade por Mês */}
                     <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200 space-y-3">
                       <h3 className="font-black text-base flex items-center gap-2">📅 Sazonalidade (Mês a Mês)</h3>
                       
