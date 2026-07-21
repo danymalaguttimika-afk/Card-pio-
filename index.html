@@ -132,7 +132,6 @@
       const viewRef = useRef(view);
       useEffect(() => { viewRef.current = view; }, [view]);
 
-      // INICIALIZAÇÃO E LEITURA DE DADOS
       useEffect(() => {
         try {
           const savedDataStr = localStorage.getItem('malaguti_customer_data');
@@ -213,7 +212,7 @@
         };
       }, []);
 
-      // TRACKER DO CLIENTE
+      // TRACKER DE PEDIDO COM TEMPO ESTIMADO BASEADO NA FILA
       useEffect(() => {
         if (!trackedOrderId) {
           setTrackedOrder(null);
@@ -223,14 +222,18 @@
         if(!db) return;
         const unsub = onSnapshot(doc(db, 'orders', trackedOrderId), (docSnap) => {
           if (docSnap.exists()) {
-            setTrackedOrder({ id: docSnap.id, ...docSnap.data() });
+            const ordData = { id: docSnap.id, ...docSnap.data() };
+            // Calcula quantos pedidos estão na frente
+            const ordersAhead = orders.filter(o => o.createdAt < ordData.createdAt && (o.status === 'pendente' || o.status === 'preparando')).length;
+            const estMinutes = 25 + (ordersAhead * 5);
+            setTrackedOrder({ ...ordData, estMinutes });
           } else {
             localStorage.removeItem('malaguti_order_id');
             setTrackedOrderId(null);
           }
         });
         return () => unsub();
-      }, [trackedOrderId]);
+      }, [trackedOrderId, orders]);
 
 
       const handleToggleStore = async () => {
@@ -313,7 +316,7 @@
         if (!currentCash) return;
         if (!window.confirm("Deseja realmente fechar o caixa do dia?")) return;
 
-        const sessionOrders = orders.filter(o => o.createdAt >= currentCash.openedAt);
+        const sessionOrders = orders.filter(o => o.createdAt >= currentCash.openedAt && o.status !== 'cancelado');
         const totalSales = sessionOrders.reduce((acc, o) => acc + (o.total || 0), 0);
         const pixSales = sessionOrders.filter(o => o.paymentMethod === 'Pix').reduce((acc, o) => acc + (o.total || 0), 0);
         const cardSales = sessionOrders.filter(o => o.paymentMethod === 'Cartão').reduce((acc, o) => acc + (o.total || 0), 0);
@@ -511,7 +514,6 @@
         await updateDoc(doc(db, 'orders', orderId), { status: newStatus });
       };
 
-      // DESPACHAR MOTOBOY E FINALIZAR
       const handleDispatchClick = (order) => {
         if (motoboys.length > 0) {
           setDispatchingOrder(order);
@@ -630,13 +632,16 @@
       const totalWithdrawals = (currentCash?.withdrawals || []).reduce((acc, w) => acc + w.amount, 0);
       const expectedCashInDrawer = (currentCash?.openingChange || 0) + sessionCash - totalWithdrawals;
 
-      // Cálculo Acerto de Motoboys
+      // ACERTO DE MOTOBOYS (Taxas + Dinheiro coletado em Dinheiro)
       const motoboyStats = {};
       activeSessionOrdersValid.forEach(o => {
         if (o.motoboy) {
-          if (!motoboyStats[o.motoboy]) motoboyStats[o.motoboy] = { count: 0, fees: 0 };
+          if (!motoboyStats[o.motoboy]) motoboyStats[o.motoboy] = { count: 0, fees: 0, cashCollected: 0 };
           motoboyStats[o.motoboy].count += 1;
           motoboyStats[o.motoboy].fees += (o.deliveryFee || 0);
+          if (o.paymentMethod === 'Dinheiro') {
+            motoboyStats[o.motoboy].cashCollected += (o.total || 0);
+          }
         }
       });
 
@@ -725,36 +730,34 @@
       return (
         <div className="min-h-screen relative pb-20 w-full overflow-x-hidden font-sans">
           
-          {/* Menu Flutuante Superior (Botões) */}
           <div className="fixed top-2 right-2 z-50 bg-zinc-800/80 p-1 rounded-full flex gap-1 border border-zinc-700 shadow-xl backdrop-blur-md">
             <button onClick={() => setView('menu')} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-colors ${view === 'menu' ? 'bg-amber-500 text-black' : 'text-zinc-400'}`}>Cardápio</button>
             <button onClick={handlePdvAccess} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-colors ${view === 'pdv' ? 'bg-amber-500 text-black' : 'text-zinc-400'}`}>PDV 🔒</button>
           </div>
 
-          {/* Banner de Loja Fechada no Cardápio */}
           {!storeOpen && view === 'menu' && (
              <div className="bg-red-600 text-white text-center py-2.5 text-xs font-black tracking-wide uppercase shadow-md sticky top-0 z-[40] flex justify-center items-center gap-2">
                <span>🚫</span> Loja Fechada no momento
              </div>
           )}
 
-          {/* RASTREADOR DE PEDIDO AO VIVO (CLIENTE) */}
+          {/* RASTREADOR DE PEDIDO COM TEMPO ESTIMADO */}
           {trackedOrder && view === 'menu' && !orderSuccess && (
             <div className="fixed bottom-24 left-1/2 -translate-x-1/2 w-[90%] max-w-sm bg-zinc-900 border border-amber-500/50 shadow-[0_0_20px_rgba(245,158,11,0.2)] rounded-2xl p-4 z-40 flex items-center justify-between">
               <div>
                 <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">Acompanhe seu Pedido</p>
-                <p className="text-sm font-black text-amber-500 mt-1">
+                <p className="text-sm font-black text-amber-500 mt-0.5">
                   {trackedOrder.status === 'pendente' && '📝 Aguardando Confirmação'}
                   {trackedOrder.status === 'preparando' && '🍳 Sendo Preparado na Cozinha'}
                   {trackedOrder.status === 'finalizado' && '🛵 Saiu para Entrega'}
                   {trackedOrder.status === 'cancelado' && '🚫 Pedido Cancelado'}
                 </p>
+                <p className="text-[11px] text-zinc-300 mt-1">⏳ Previsão: ~{trackedOrder.estMinutes} min</p>
               </div>
               <button onClick={() => { setTrackedOrderId(null); setTrackedOrder(null); localStorage.removeItem('malaguti_order_id'); }} className="bg-zinc-800 p-2 rounded-xl text-xs font-bold text-zinc-300">Ocultar</button>
             </div>
           )}
 
-          {/* Modal de Sucesso */}
           {orderSuccess && (
              <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
                  <div className="bg-zinc-900 rounded-[2.5rem] p-8 max-w-sm w-full text-center border border-zinc-800 shadow-2xl relative overflow-hidden">
@@ -762,8 +765,8 @@
                          ✓
                      </div>
                      <h2 className="text-2xl font-black text-white mb-2 tracking-tight">Pedido Recebido! 🎉</h2>
-                     <p className="text-zinc-400 text-sm mb-6 leading-relaxed">
-                         Olá <strong>{orderSuccess.customerName}</strong>, seu pedido já está no nosso sistema. Acompanhe o status ao vivo na tela do cardápio!
+                     <p className="text-zinc-400 text-sm mb-4 leading-relaxed">
+                         Olá <strong>{orderSuccess.customerName}</strong>, seu pedido já está no nosso sistema. O tempo estimado de entrega é de aproximadamente <strong className="text-amber-500">30 a 45 minutos</strong>.
                      </p>
 
                      {orderSuccess.paymentMethod === 'Pix' && (
@@ -781,7 +784,7 @@
                      )}
 
                      <button onClick={() => setOrderSuccess(null)} className="w-full bg-amber-500 text-black py-3.5 rounded-xl font-black text-sm transition-colors shadow-lg">
-                         Acompanhar Pedido
+                         Acompanhar Status ao Vivo
                      </button>
                  </div>
              </div>
@@ -1012,7 +1015,6 @@
                   <span className="text-[10px] text-amber-500 font-bold uppercase">Malaguti Brothers</span>
                 </div>
                 
-                {/* BOTÕES PDV: TESTE SOM e ABRIR/FECHAR LOJA */}
                 <div className="flex flex-col items-end gap-2">
                   <button onClick={handleToggleStore} className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 shadow-sm transition-colors ${storeOpen ? 'bg-green-500 text-green-950' : 'bg-red-500 text-white'}`}>
                     {storeOpen ? '🟢 Loja Aberta' : '🔴 Loja Fechada'}
@@ -1083,7 +1085,6 @@
 
                             {order.status === 'pendente' && <button onClick={() => handleUpdateOrderStatus(order.id, 'preparando')} className="flex-1 bg-amber-500 font-black rounded-2xl">Preparar</button>}
                             
-                            {/* NOVO BOTÃO DE DESPACHO PARA MOTOBOY */}
                             {order.status === 'preparando' && (
                               <button onClick={() => handleDispatchClick(order)} className="flex-1 bg-[#25D366] text-white font-black rounded-2xl text-sm leading-tight">
                                 🛵 Despachar
@@ -1099,7 +1100,6 @@
                   </div>
                 )}
 
-                {/* MODAL DE DESPACHO DE MOTOBOY */}
                 {dispatchingOrder && (
                    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm">
                      <div className="bg-white w-full max-w-md rounded-t-[2rem] p-6 relative z-10 flex flex-col">
@@ -1203,7 +1203,7 @@
                   </div>
                 )}
 
-                {/* Aba de Caixa com Gestão de Motoboys */}
+                {/* Aba de Caixa com Gestão Completa de Motoboys */}
                 {pdvTab === 'cash' && (
                   <div className="p-4 space-y-4">
                     {!currentCash ? (
@@ -1294,20 +1294,31 @@
                           </div>
                         </div>
 
-                        {/* NOVO: ACERTO DE MOTOBOYS */}
+                        {/* ACERTO AVANÇADO DE MOTOBOYS */}
                         <div className="bg-blue-50 p-4 rounded-2xl border border-blue-200 space-y-3">
-                          <h4 className="font-bold text-xs uppercase text-blue-900">🛵 Acerto de Motoboys (Taxas da Sessão):</h4>
+                          <h4 className="font-bold text-xs uppercase text-blue-900">🛵 Acerto de Dinheiro com Motoboys:</h4>
                           {Object.keys(motoboyStats).length === 0 ? (
-                             <p className="text-xs text-blue-400">Nenhuma entrega com motoboy registrada.</p>
+                             <p className="text-xs text-blue-400">Nenhuma entrega despachada para motoboys hoje.</p>
                           ) : (
-                             <div className="space-y-2">
+                             <div className="space-y-3">
                                {Object.entries(motoboyStats).map(([mb, data]) => (
-                                  <div key={mb} className="flex justify-between items-center bg-white px-3 py-2 rounded-xl border border-blue-100 text-xs">
-                                    <div>
-                                      <span className="font-bold text-blue-900">{mb}</span>
-                                      <span className="text-[10px] text-zinc-500 block">{data.count} entregas efetuadas</span>
+                                  <div key={mb} className="bg-white p-3 rounded-xl border border-blue-100 text-xs space-y-1">
+                                    <div className="flex justify-between items-center font-black text-blue-900 text-sm">
+                                      <span>{mb}</span>
+                                      <span className="text-zinc-500 text-xs">{data.count} entregas</span>
                                     </div>
-                                    <span className="font-black text-blue-700">R$ {data.fees.toFixed(2)}</span>
+                                    <div className="flex justify-between text-zinc-600">
+                                      <span>Dinheiro recolhido (trazer p/ caixa):</span>
+                                      <span className="font-bold text-zinc-900">R$ {data.cashCollected.toFixed(2)}</span>
+                                    </div>
+                                    <div className="flex justify-between text-zinc-600">
+                                      <span>Taxas devidas ao motoboy:</span>
+                                      <span className="font-bold text-blue-700">- R$ {data.fees.toFixed(2)}</span>
+                                    </div>
+                                    <div className="flex justify-between pt-1 border-t border-zinc-100 font-bold text-xs">
+                                      <span>Balanço (Acerto Final):</span>
+                                      <span className="text-green-700">Trazer líquidas R$ {(data.cashCollected - data.fees).toFixed(2)}</span>
+                                    </div>
                                   </div>
                                ))}
                              </div>
@@ -1496,7 +1507,6 @@
                       </form>
                     </div>
 
-                    {/* NOVA SEÇÃO: EQUIPE DE ENTREGADORES */}
                     <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200">
                       <h3 className="font-black text-xl mb-2">🛵 Equipe de Entregadores</h3>
                       <p className="text-xs text-zinc-500 mb-4">Cadastre os motoboys para despachar pedidos e gerenciar o acerto de taxas no caixa.</p>
