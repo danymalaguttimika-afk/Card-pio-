@@ -134,7 +134,6 @@
       useEffect(() => { viewRef.current = view; }, [view]);
 
       useEffect(() => {
-        // --- PREENCHIMENTO AUTOMÁTICO VIA CACHE ---
         try {
           const savedDataStr = localStorage.getItem('malaguti_customer_data');
           if (savedDataStr) {
@@ -285,7 +284,8 @@
         if (!currentCash) return;
         if (!window.confirm("Deseja realmente fechar o caixa do dia?")) return;
 
-        const sessionOrders = orders.filter(o => o.createdAt >= currentCash.openedAt);
+        // Ao fechar o caixa, filtramos os cancelados para não sujar a receita
+        const sessionOrders = orders.filter(o => o.createdAt >= currentCash.openedAt && o.status !== 'cancelado');
         const totalSales = sessionOrders.reduce((acc, o) => acc + (o.total || 0), 0);
         const pixSales = sessionOrders.filter(o => o.paymentMethod === 'Pix').reduce((acc, o) => acc + (o.total || 0), 0);
         const cardSales = sessionOrders.filter(o => o.paymentMethod === 'Cartão').reduce((acc, o) => acc + (o.total || 0), 0);
@@ -471,7 +471,6 @@
             paymentMethod: paymentMethod, phone: WHATSAPP_NUMBER, status: 'pendente', source: 'whatsapp', createdAt: Date.now()
           });
           
-          // Salva no cache do cliente para a próxima compra
           try {
             localStorage.setItem('malaguti_customer_data', JSON.stringify({
               customerName, customerPhone, street, number, neighborhood, reference
@@ -484,7 +483,6 @@
             total: cartTotal
           });
 
-          // Limpa apenas o carrinho, os dados do cliente ficam salvos na tela
           setCart([]); 
           setIsCartOpen(false); 
         } catch (error) { alert("Erro ao gerar pedido."); }
@@ -503,16 +501,24 @@
         } catch (error) { console.error(error); }
       };
 
-      const handleDeleteProduct = async (id) => {
-        if (!window.confirm("Tem certeza que deseja excluir este produto?")) return;
-        const { db, doc, deleteDoc } = window.firebaseAPI;
-        await deleteDoc(doc(db, 'products', id));
-      };
-
+      // Exclusão permanente só para limpeza se necessário
       const handleDeleteOrder = async (id) => {
-        if (!window.confirm("Atenção! Tem certeza que deseja apagar este pedido do sistema?")) return;
+        if (!window.confirm("Atenção! Deseja apagar permanentemente este pedido?")) return;
         const { db, doc, deleteDoc } = window.firebaseAPI;
         await deleteDoc(doc(db, 'orders', id));
+      };
+
+      // Novo Fluxo de Cancelamento
+      const handleCancelOrder = async (orderId) => {
+        const reason = prompt("Qual o motivo do cancelamento? (Ex: Cliente desistiu, Trote, Faltou item)");
+        if (!reason) return; // Se cancelar o prompt, não faz nada
+        
+        try {
+          const { db, doc, updateDoc } = window.firebaseAPI;
+          await updateDoc(doc(db, 'orders', orderId), { status: 'cancelado', cancelReason: reason });
+        } catch (error) {
+          alert("Erro ao cancelar o pedido.");
+        }
       };
 
       const handleUpdateOrderStatus = async (orderId, newStatus) => {
@@ -623,11 +629,16 @@
       const filteredProducts = (activeCategory === 'Todos' ? products : products.filter(p => p.category === activeCategory))
         .filter(p => !p.paused);
 
-      const activeSessionOrders = currentCash ? orders.filter(o => o.createdAt >= currentCash.openedAt) : [];
-      const sessionTotal = activeSessionOrders.reduce((acc, o) => acc + (o.total || 0), 0);
-      const sessionPix = activeSessionOrders.filter(o => o.paymentMethod === 'Pix').reduce((acc, o) => acc + (o.total || 0), 0);
-      const sessionCard = activeSessionOrders.filter(o => o.paymentMethod === 'Cartão').reduce((acc, o) => acc + (o.total || 0), 0);
-      const sessionCash = activeSessionOrders.filter(o => o.paymentMethod === 'Dinheiro').reduce((acc, o) => acc + (o.total || 0), 0);
+      // --- FILTRO DIÁRIO DE PEDIDOS NO PDV ---
+      const startOfDayMs = new Date().setHours(0,0,0,0);
+      const pdvDisplayOrders = orders.filter(o => o.createdAt >= startOfDayMs);
+
+      // --- CAIXA: IGNORA OS CANCELADOS NA SOMA ---
+      const activeSessionOrdersValid = currentCash ? orders.filter(o => o.createdAt >= currentCash.openedAt && o.status !== 'cancelado') : [];
+      const sessionTotal = activeSessionOrdersValid.reduce((acc, o) => acc + (o.total || 0), 0);
+      const sessionPix = activeSessionOrdersValid.filter(o => o.paymentMethod === 'Pix').reduce((acc, o) => acc + (o.total || 0), 0);
+      const sessionCard = activeSessionOrdersValid.filter(o => o.paymentMethod === 'Cartão').reduce((acc, o) => acc + (o.total || 0), 0);
+      const sessionCash = activeSessionOrdersValid.filter(o => o.paymentMethod === 'Dinheiro').reduce((acc, o) => acc + (o.total || 0), 0);
       
       const totalWithdrawals = (currentCash?.withdrawals || []).reduce((acc, w) => acc + w.amount, 0);
       const expectedCashInDrawer = (currentCash?.openingChange || 0) + sessionCash - totalWithdrawals;
@@ -635,6 +646,16 @@
       const closedCashRegisters = cashRegisters.filter(c => c.status === 'fechado');
       const monthlyRevenue = closedCashRegisters.reduce((acc, c) => acc + (c.totalSales || 0), 0);
 
+      const productSalesCount = {};
+      activeSessionOrdersValid.forEach(o => {
+        if (o.items) {
+          o.items.forEach(item => {
+            productSalesCount[item.name] = (productSalesCount[item.name] || 0) + item.quantity;
+          });
+        }
+      });
+
+      // --- ANÁLISE: CÁLCULOS E CANCELADOS ---
       const filteredOrdersForAnalysis = orders.filter(o => {
         if (!analysisStartDate && !analysisEndDate) return true;
         const orderDateStr = new Date(o.createdAt).toISOString().split('T')[0];
@@ -643,12 +664,19 @@
         return true;
       });
 
+      // Separamos os cancelados para a métrica de prejuízo
+      const validOrdersForAnalysis = filteredOrdersForAnalysis.filter(o => o.status !== 'cancelado');
+      const canceledOrdersForAnalysis = filteredOrdersForAnalysis.filter(o => o.status === 'cancelado');
+      
+      const periodCanceledRevenue = canceledOrdersForAnalysis.reduce((acc, o) => acc + (o.total || 0), 0);
+      const periodCanceledCount = canceledOrdersForAnalysis.length;
+
       const globalProductStats = {};
       const categorySalesStats = {};
       const periodSeasonalityStats = {};
       let periodTotalRevenue = 0;
 
-      filteredOrdersForAnalysis.forEach(o => {
+      validOrdersForAnalysis.forEach(o => {
         periodTotalRevenue += (o.total || 0);
         const orderDate = new Date(o.createdAt);
         const monthKey = orderDate.toLocaleString('pt-BR', { month: 'long', year: 'numeric' });
@@ -682,6 +710,7 @@
       const sortedCategories = Object.entries(categorySalesStats).sort((a, b) => b[1].revenue - a[1].revenue);
       const sortedSeasonality = Object.entries(periodSeasonalityStats).sort((a, b) => new Date(b[0]) - new Date(a[0]));
 
+      // Leads
       const uniqueClientsMap = {};
       orders.forEach(o => {
         if (o.customerPhone) {
@@ -877,7 +906,7 @@
                 </div>
               )}
 
-              {/* Modal da Sacola com o Checkout Completo e Chave Pix Instantânea */}
+              {/* Modal da Sacola */}
               {isCartOpen && (
                 <div className="fixed inset-0 z-50 flex items-end justify-center">
                   <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsCartOpen(false)}></div>
@@ -1011,14 +1040,15 @@
                 {pdvTab === 'orders' && (
                   <div className="p-4">
                     <div className="flex bg-zinc-200 p-1 rounded-2xl mb-6">
-                      {['pendente', 'preparando', 'finalizado'].map(tab => (
-                        <button key={tab} onClick={() => setOrderFilter(tab)} className={`flex-1 py-2.5 rounded-xl text-sm font-bold ${orderFilter === tab ? 'bg-amber-500 text-black' : 'text-zinc-500'}`}>
-                          {tab === 'pendente' ? 'Novos' : tab === 'preparando' ? 'Cozinha' : 'Prontos'}
+                      {['pendente', 'preparando', 'finalizado', 'cancelado'].map(tab => (
+                        <button key={tab} onClick={() => setOrderFilter(tab)} className={`flex-1 py-2.5 rounded-xl text-[11px] font-bold uppercase ${orderFilter === tab ? (tab === 'cancelado' ? 'bg-red-500 text-white' : 'bg-amber-500 text-black') : 'text-zinc-500'}`}>
+                          {tab === 'pendente' ? 'Novos' : tab === 'preparando' ? 'Cozinha' : tab === 'finalizado' ? 'Prontos' : 'Cancels.'}
                         </button>
                       ))}
                     </div>
+                    
                     <div className="space-y-4">
-                      {orders.filter(o => o.status === orderFilter).map(order => (
+                      {pdvDisplayOrders.filter(o => o.status === orderFilter).map(order => (
                         <div key={order.id} className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-200">
                           <div className="flex justify-between items-start">
                             <h3 className="font-black text-lg">{order.customerName}</h3>
@@ -1040,19 +1070,31 @@
                               <div className="flex justify-between"><span>Taxa Entrega:</span> <span>R$ {(order.deliveryFee || 0).toFixed(2)}</span></div>
                               <div className="flex justify-between font-black text-sm text-zinc-900 pt-1"><span>Total:</span> <span>R$ {order.total.toFixed(2)}</span></div>
                             </div>
+                            {order.status === 'cancelado' && (
+                              <div className="mt-3 bg-red-100 text-red-700 p-2 rounded-xl text-xs font-bold border border-red-200">
+                                🚫 Motivo: {order.cancelReason || 'Não informado'}
+                              </div>
+                            )}
                           </div>
                           
                           <div className="flex gap-2">
-                            <button onClick={() => printOrder(order)} className="w-12 h-12 bg-zinc-100 rounded-2xl flex items-center justify-center text-xl">🖨️</button>
-                            <button onClick={() => handleDeleteOrder(order.id)} className="w-12 h-12 bg-red-100 text-red-500 rounded-2xl flex items-center justify-center text-xl">🗑️</button>
+                            <button onClick={() => printOrder(order)} className="w-12 h-12 bg-zinc-100 rounded-2xl flex items-center justify-center text-xl" title="Imprimir">🖨️</button>
                             
+                            {order.status !== 'cancelado' && (
+                              <button onClick={() => handleCancelOrder(order.id)} className="w-12 h-12 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center text-xl" title="Cancelar Pedido">🚫</button>
+                            )}
+                            
+                            {order.status === 'cancelado' && (
+                              <button onClick={() => handleDeleteOrder(order.id)} className="w-12 h-12 bg-zinc-100 text-zinc-400 hover:text-red-500 rounded-2xl flex items-center justify-center text-xl" title="Apagar Definitivamente">🗑️</button>
+                            )}
+
                             {order.status === 'pendente' && <button onClick={() => handleUpdateOrderStatus(order.id, 'preparando')} className="flex-1 bg-amber-500 font-black rounded-2xl">Preparar</button>}
                             {order.status === 'preparando' && <button onClick={() => handleFinishAndNotify(order)} className="flex-1 bg-[#25D366] text-white font-black rounded-2xl text-sm leading-tight">Finalizar & Avisar</button>}
                           </div>
                         </div>
                       ))}
-                      {orders.filter(o => o.status === orderFilter).length === 0 && (
-                        <div className="text-center text-zinc-400 mt-10">Nenhum pedido nesta aba.</div>
+                      {pdvDisplayOrders.filter(o => o.status === orderFilter).length === 0 && (
+                        <div className="text-center text-zinc-400 mt-10">Nenhum pedido nesta aba hoje.</div>
                       )}
                     </div>
                   </div>
@@ -1140,6 +1182,7 @@
                   </div>
                 )}
 
+                {/* Aba de Caixa */}
                 {pdvTab === 'cash' && (
                   <div className="p-4 space-y-4">
                     {!currentCash ? (
@@ -1203,7 +1246,7 @@
                         <div className="bg-zinc-900 text-white p-5 rounded-2xl shadow-md space-y-1">
                           <span className="text-xs text-zinc-400 uppercase font-bold tracking-wider">Faturamento da Sessão Atual</span>
                           <h2 className="text-3xl font-black text-amber-500">R$ {sessionTotal.toFixed(2)}</h2>
-                          <p className="text-xs text-zinc-400">{activeSessionOrders.length} pedidos realizados hoje</p>
+                          <p className="text-xs text-zinc-400">{activeSessionOrdersValid.length} pedidos finalizados (exclui cancelados)</p>
                         </div>
 
                         <div className="grid grid-cols-3 gap-2">
@@ -1274,17 +1317,6 @@
                           )}
                         </div>
 
-                        <h4 className="font-bold text-sm uppercase text-zinc-600 pt-2">Produtos vendidos hoje:</h4>
-                        <div className="space-y-1.5 max-h-36 overflow-y-auto">
-                          {Object.entries(productSalesCount).map(([prodName, qty]) => (
-                            <div key={prodName} className="flex justify-between items-center bg-zinc-50 px-3 py-2 rounded-xl border border-zinc-200 text-xs">
-                              <span className="font-medium text-zinc-800">{prodName}</span>
-                              <span className="font-black bg-zinc-200 px-2 py-0.5 rounded-full">{qty} un</span>
-                            </div>
-                          ))}
-                          {Object.keys(productSalesCount).length === 0 && <p className="text-xs text-zinc-400 text-center py-2">Nenhuma venda nesta sessão.</p>}
-                        </div>
-
                         <button onClick={handleCloseCash} className="w-full bg-red-600 text-white font-black py-4 rounded-2xl shadow-md text-sm mt-4">
                           🔒 Fechar Caixa do Dia
                         </button>
@@ -1293,11 +1325,12 @@
                   </div>
                 )}
 
+                {/* Aba de Análise e Métricas de Cancelamento */}
                 {pdvTab === 'reports' && (
                   <div className="p-4 space-y-6">
                     <div className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-200 space-y-3">
                       <h3 className="font-black text-base flex items-center gap-2">📅 Filtrar por Período</h3>
-                      <p className="text-xs text-zinc-500">Selecione a data inicial e final para analisar o desempenho do período desejado.</p>
+                      <p className="text-xs text-zinc-500">Selecione a data inicial e final para analisar o desempenho.</p>
                       
                       <div className="grid grid-cols-2 gap-2">
                         <div>
@@ -1330,10 +1363,20 @@
                       )}
 
                       <div className="bg-zinc-900 text-white p-4 rounded-2xl mt-3">
-                        <span className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">Faturamento no Período Selecionado</span>
+                        <span className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">Faturamento Líquido</span>
                         <h2 className="text-2xl font-black text-amber-500 mt-0.5">R$ {periodTotalRevenue.toFixed(2)}</h2>
-                        <p className="text-[11px] text-zinc-400">{filteredOrdersForAnalysis.length} pedidos no total</p>
+                        <p className="text-[11px] text-zinc-400">{validOrdersForAnalysis.length} pedidos validados</p>
                       </div>
+
+                      {periodCanceledCount > 0 && (
+                        <div className="bg-red-50 border border-red-200 p-3 rounded-2xl mt-2 flex justify-between items-center">
+                          <div>
+                            <span className="text-[10px] font-bold text-red-600 uppercase">Perdas c/ Cancelamentos</span>
+                            <p className="text-xs text-red-800">{periodCanceledCount} pedidos cancelados</p>
+                          </div>
+                          <span className="font-black text-red-600">- R$ {periodCanceledRevenue.toFixed(2)}</span>
+                        </div>
+                      )}
                     </div>
 
                     <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200 space-y-3">
@@ -1354,7 +1397,7 @@
                             <span className="font-black bg-zinc-200 text-zinc-800 px-3 py-1 rounded-full text-xs">{stats.qty} un</span>
                           </div>
                         ))}
-                        {sortedGlobalProducts.length === 0 && <p className="text-xs text-zinc-400 text-center py-6">Nenhum produto vendido neste período.</p>}
+                        {sortedGlobalProducts.length === 0 && <p className="text-xs text-zinc-400 text-center py-6">Nenhum produto validado neste período.</p>}
                       </div>
                     </div>
 
@@ -1383,12 +1426,12 @@
                           <div key={monthName} className="flex justify-between items-center bg-zinc-50 px-4 py-3 rounded-2xl border border-zinc-200 text-xs">
                             <div>
                               <h4 className="font-black text-zinc-900 capitalize text-sm">{monthName}</h4>
-                              <span className="text-zinc-500">{data.count} pedidos realizados</span>
+                              <span className="text-zinc-500">{data.count} pedidos validos</span>
                             </div>
                             <span className="font-black text-green-700 text-base">R$ {data.revenue.toFixed(2)}</span>
                           </div>
                         ))}
-                        {sortedSeasonality.length === 0 && <p className="text-xs text-zinc-400 text-center py-6">Nenhum dado mensal registrado.</p>}
+                        {sortedSeasonality.length === 0 && <p className="text-xs text-zinc-400 text-center py-6">Nenhum dado mensal validado.</p>}
                       </div>
                     </div>
                   </div>
@@ -1446,7 +1489,6 @@
                 )}
               </main>
 
-              {/* Modal de Cadastro de Produto com Seletor de Câmera e Galeria */}
               {isAddProductModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60">
                   <div className="bg-white w-full max-w-md rounded-t-[2rem] p-6 relative z-10 h-[85vh] flex flex-col">
