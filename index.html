@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Malaguti Brothers</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    ::-webkit-scrollbar { display: none; }
+    * { -ms-overflow-style: none; scrollbar-width: none; -webkit-tap-highlight-color: transparent; }
+    @media print {
+      body * { visibility: hidden; }
+      #print-area, #print-area * { visibility: visible; color: black; }
+      #print-area { position: absolute; left: 0; top: 0; width: 80mm; padding: 2mm; background: white; font-family: monospace; font-size: 14px;}
+      .no-print { display: none !important; }
+    }
+  </style>
+</head>
+<body class="bg-zinc-950 text-white selection:bg-amber-500 selection:text-white">
+  
+  <div id="print-area" class="hidden"></div>
+  <div id="root"></div>
+
+  <!-- Configuração do Firebase com suas chaves -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+    import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAzCDS15N2e8hdP5wrQEzDNvZKBOAdeYjw",
+      authDomain: "malaguti-brothers.firebaseapp.com",
+      projectId: "malaguti-brothers",
+      storageBucket: "malaguti-brothers.firebasestorage.app",
+      messagingSenderId: "622848104847",
+      appId: "1:622848104847:web:5874e22dab246855bb93fa"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    window.firebaseAPI = {
+      auth: getAuth(app),
+      db: getFirestore(app),
+      collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, signInAnonymously, onAuthStateChanged
+    };
+    window.dispatchEvent(new Event('firebase-ready'));
+  </script>
+
+  <!-- Aplicativo Malaguti Brothers -->
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+    const WHATSAPP_NUMBER = "5511999999999"; // Substitua pelo seu WhatsApp depois
+    const LOGO_URL = "https://cdn-icons-png.flaticon.com/512/3014/3014491.png"; // Substitua pelo link da sua logo sem fundo depois
+
+    function App() {
+      const [user, setUser] = useState(null);
+      const [view, setView] = useState('menu');
+      const [products, setProducts] = useState([]);
+      const [orders, setOrders] = useState([]);
+      const [loading, setLoading] = useState(true);
+
+      const [cart, setCart] = useState([]);
+      const [isCartOpen, setIsCartOpen] = useState(false);
+      const [customerName, setCustomerName] = useState("");
+      const [activeCategory, setActiveCategory] = useState("Todos");
+      const [pdvTab, setPdvTab] = useState('orders');
+      const [orderFilter, setOrderFilter] = useState('pendente');
+      const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false);
+      const [newProduct, setNewProduct] = useState({ name: '', price: '', category: 'Burgers', description: '', imageUrl: '' });
+
+      useEffect(() => {
+        const init = () => {
+          const { auth, signInAnonymously, onAuthStateChanged } = window.firebaseAPI;
+          signInAnonymously(auth).catch(console.error);
+          onAuthStateChanged(auth, setUser);
+        };
+        if (window.firebaseAPI) init();
+        else window.addEventListener('firebase-ready', init);
+      }, []);
+
+      useEffect(() => {
+        if (!user) return;
+        const { db, collection, onSnapshot } = window.firebaseAPI;
+        
+        const unsubProducts = onSnapshot(collection(db, 'products'), (snap) => {
+          setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        });
+        const unsubOrders = onSnapshot(collection(db, 'orders'), (snap) => {
+          const ords = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          ords.sort((a, b) => b.createdAt - a.createdAt);
+          setOrders(ords);
+          setLoading(false);
+        });
+        return () => { unsubProducts(); unsubOrders(); };
+      }, [user]);
+
+      const addToCart = (product) => {
+        setCart(prev => {
+          const existing = prev.find(item => item.id === product.id);
+          if (existing) return prev.map(item => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
+          return [...prev, { ...product, quantity: 1 }];
+        });
+      };
+
+      const updateQuantity = (productId, delta) => {
+        setCart(prev => prev.map(item => {
+          if (item.id === productId) {
+            const newQ = item.quantity + delta;
+            return newQ > 0 ? { ...item, quantity: newQ } : item;
+          }
+          return item;
+        }));
+      };
+
+      const cartTotal = cart.reduce((acc, item) => acc + (parseFloat(item.price) * item.quantity), 0);
+
+      const handleCheckout = async () => {
+        if (cart.length === 0) return;
+        if (!customerName.trim()) return alert("Por favor, insira seu nome.");
+
+        let text = `*Novo Pedido - Malaguti Brothers*\n\n*Cliente:* ${customerName}\n\n*Itens:*\n`;
+        cart.forEach(item => {
+          text += `${item.quantity}x ${item.name} - R$ ${(parseFloat(item.price) * item.quantity).toFixed(2)}\n`;
+        });
+        text += `\n*Total:* R$ ${cartTotal.toFixed(2)}\n\n_Zapia, confirme o endereço e forma de pagamento._`;
+
+        try {
+          const { db, collection, addDoc } = window.firebaseAPI;
+          await addDoc(collection(db, 'orders'), {
+            customerName, phone: WHATSAPP_NUMBER, items: cart, total: cartTotal, status: 'pendente', source: 'whatsapp_zapia', createdAt: Date.now()
+          });
+          const waUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
+          window.open(waUrl, '_blank');
+          setCart([]); setIsCartOpen(false); setCustomerName("");
+        } catch (error) { alert("Erro ao gerar pedido."); }
+      };
+
+      const handleAddProduct = async (e) => {
+        e.preventDefault();
+        if (!newProduct.name || !newProduct.price) return;
+        try {
+          const { db, collection, addDoc } = window.firebaseAPI;
+          await addDoc(collection(db, 'products'), { ...newProduct, price: parseFloat(newProduct.price), createdAt: Date.now() });
+          setNewProduct({ name: '', price: '', category: 'Burgers', description: '', imageUrl: '' });
+          setIsAddProductModalOpen(false);
+        } catch (error) { console.error(error); }
+      };
+
+      const handleDeleteProduct = async (id) => {
+        if (!window.confirm("Excluir produto?")) return;
+        const { db, doc, deleteDoc } = window.firebaseAPI;
+        await deleteDoc(doc(db, 'products', id));
+      };
+
+      const handleUpdateOrderStatus = async (orderId, newStatus) => {
+        const { db, doc, updateDoc } = window.firebaseAPI;
+        await updateDoc(doc(db, 'orders', orderId), { status: newStatus });
+      };
+
+      const printOrder = (order) => {
+        const printArea = document.getElementById('print-area');
+        let html = `
+          <div style="text-align: center; margin-bottom: 10px; border-bottom: 1px dashed black; padding-bottom: 10px;">
+            <h2 style="margin:0; font-size: 18px;">MALAGUTI BROTHERS</h2>
+            <p style="margin:0;">Pedido #${order.id.substring(0, 5).toUpperCase()}</p>
+            <p style="margin:0;">${new Date(order.createdAt).toLocaleString('pt-BR')}</p>
+          </div>
+          <div style="margin: 10px 0; border-bottom: 1px dashed black; padding-bottom: 10px;">
+            <p style="margin:2px 0;"><strong>Cliente:</strong> ${order.customerName}</p>
+          </div>
+          <table style="width: 100%; margin: 10px 0;">
+        `;
+        order.items.forEach(item => {
+          html += `<tr><td style="vertical-align: top; width: 15%;"><strong>${item.quantity}x</strong></td><td style="vertical-align: top;">${item.name}</td><td style="text-align: right; vertical-align: top;">R$${(item.price * item.quantity).toFixed(2)}</td></tr>`;
+        });
+        html += `
+          </table>
+          <div style="text-align: right; font-size: 16px; margin-top: 10px; border-top: 1px dashed black; padding-top: 10px;">
+            <strong>TOTAL: R$ ${order.total.toFixed(2)}</strong>
+          </div>
+        `;
+        printArea.innerHTML = html;
+        window.print();
+      };
+
+      if (loading) return <div className="min-h-screen flex items-center justify-center font-bold text-amber-500 animate-pulse">Conectando ao banco de dados...</div>;
+
+      const categories = ['Todos', 'Burgers', 'Porções', 'Bebidas', 'Sobremesas'];
+      const filteredProducts = activeCategory === 'Todos' ? products : products.filter(p => p.category === activeCategory);
+
+      return (
+        <div className="min-h-screen relative pb-20 w-full overflow-x-hidden font-sans no-print">
+          
+          {/* BOTÃO MÁGICO DE TESTE (Canto Superior Direito) */}
+          <div className="fixed top-2 right-2 z-50 bg-zinc-800/80 p-1 rounded-full flex gap-1 border border-zinc-700 shadow-xl backdrop-blur-md">
+            <button onClick={() => setView('menu')} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-colors ${view === 'menu' ? 'bg-amber-500 text-black' : 'text-zinc-400'}`}>Cliente</button>
+            <button onClick={() => setView('pdv')} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-colors ${view === 'pdv' ? 'bg-amber-500 text-black' : 'text-zinc-400'}`}>PDV</button>
+          </div>
+
+          {view === 'menu' && (
+            <div className="w-full max-w-md mx-auto relative bg-zinc-950 min-h-screen shadow-2xl">
+              <header className="bg-zinc-900 rounded-b-[2.5rem] pt-12 pb-8 px-6 shadow-2xl relative z-10 flex flex-col items-center">
+                <img src={LOGO_URL} alt="Logo" className="w-28 h-28 object-contain mb-4 drop-shadow-[0_0_15px_rgba(245,158,11,0.5)]" onError={(e) => e.target.style.display = 'none'} />
+                <h1 className="text-3xl font-black text-white tracking-tight">MALAGUTI <span className="text-amber-500">BROTHERS</span></h1>
+                <p className="text-zinc-400 text-sm mt-1">Lanchonete Artesanal</p>
+              </header>
+
+              <div className="sticky top-0 z-20 bg-zinc-950/90 backdrop-blur-md pt-4 pb-2 border-b border-zinc-800">
+                <div className="flex overflow-x-auto gap-3 px-4 pb-2 snap-x">
+                  {categories.map(cat => (
+                    <button key={cat} onClick={() => setActiveCategory(cat)} className={`snap-center whitespace-nowrap px-5 py-2.5 rounded-full text-sm font-bold ${activeCategory === cat ? 'bg-amber-500 text-zinc-950' : 'bg-zinc-900 text-zinc-400 border border-zinc-800'}`}>
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <main className="p-4 space-y-4 pb-32">
+                {filteredProducts.map(product => (
+                  <div key={product.id} className="bg-zinc-900 rounded-3xl p-3 flex gap-4 border border-zinc-800">
+                    <div className="w-28 h-28 shrink-0 rounded-2xl bg-zinc-950 flex items-center justify-center overflow-hidden">
+                      {product.imageUrl ? <img src={product.imageUrl} className="w-full h-full object-cover" /> : <span className="text-3xl">🍔</span>}
+                    </div>
+                    <div className="flex-1 flex flex-col justify-between py-1 pr-1">
+                      <div>
+                        <h3 className="font-bold text-zinc-100">{product.name}</h3>
+                        <p className="text-[11px] text-zinc-400 mt-1 line-clamp-2">{product.description}</p>
+                      </div>
+                      <div className="flex items-center justify-between mt-2">
+                        <span className="font-black text-amber-500 text-lg">R$ {parseFloat(product.price).toFixed(2)}</span>
+                        <button onClick={() => addToCart(product)} className="w-10 h-10 bg-amber-500 rounded-full flex items-center justify-center text-zinc-950 font-black text-xl">➕</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </main>
+
+              {cart.length > 0 && (
+                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-full max-w-[90%] z-40">
+                  <button onClick={() => setIsCartOpen(true)} className="w-full bg-amber-500 text-zinc-950 px-6 py-4 rounded-3xl font-bold flex items-center justify-between shadow-[0_10px_40px_rgba(245,158,11,0.3)]">
+                    <div className="flex items-center gap-3">
+                      <div className="bg-zinc-950 text-amber-500 w-8 h-8 rounded-full flex items-center justify-center font-black">{cart.reduce((a, b) => a + b.quantity, 0)}</div>
+                      <span>Ver Sacola</span>
+                    </div>
+                    <span className="text-lg">R$ {cartTotal.toFixed(2)}</span>
+                  </button>
+                </div>
+              )}
+
+              {isCartOpen && (
+                <div className="fixed inset-0 z-50 flex items-end justify-center">
+                  <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsCartOpen(false)}></div>
+                  <div className="bg-zinc-900 w-full max-w-md h-[90vh] rounded-t-[2.5rem] relative z-10 flex flex-col">
+                    <div className="px-6 pb-4 pt-6 flex justify-between items-center border-b border-zinc-800">
+                      <h2 className="text-2xl font-black text-white flex items-center gap-2">🛍️ Sacola</h2>
+                      <button onClick={() => setIsCartOpen(false)} className="bg-zinc-800 p-2 rounded-full">✖️</button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                      {cart.map(item => (
+                        <div key={item.id} className="flex items-center gap-4">
+                          <div className="flex-1">
+                            <h4 className="font-bold text-zinc-100">{item.name}</h4>
+                            <p className="text-amber-500 font-bold mt-1">R$ {(item.price * item.quantity).toFixed(2)}</p>
+                          </div>
+                          <div className="flex items-center bg-zinc-950 rounded-full border border-zinc-800">
+                            <button onClick={() => updateQuantity(item.id, -1)} className="w-10 h-10 flex items-center justify-center">➖</button>
+                            <span className="font-black w-4 text-center text-zinc-100">{item.quantity}</span>
+                            <button onClick={() => updateQuantity(item.id, 1)} className="w-10 h-10 flex items-center justify-center text-amber-500">➕</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="p-6 bg-zinc-950 border-t border-zinc-800 rounded-t-3xl">
+                      <input type="text" value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Seu nome" className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl px-5 py-4 text-white mb-4" />
+                      <button onClick={handleCheckout} className="w-full bg-[#25D366] text-white py-4 rounded-2xl font-black text-lg flex items-center justify-center gap-3">
+                        💬 Enviar via Zapia
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {view === 'pdv' && (
+            <div className="bg-zinc-100 min-h-screen text-zinc-900 flex flex-col w-full max-w-md mx-auto shadow-2xl relative">
+              <header className="bg-zinc-900 pt-10 pb-6 px-6 rounded-b-[2rem] shadow-lg sticky top-0 z-20 flex justify-between items-center text-white">
+                <div>
+                  <h1 className="text-xl font-black uppercase leading-none">PDV Mobile</h1>
+                  <span className="text-[10px] text-amber-500 font-bold uppercase">Malaguti Brothers</span>
+                </div>
+              </header>
+
+              <main className="flex-1 overflow-y-auto pb-24">
+                {pdvTab === 'orders' && (
+                  <div className="p-4">
+                    <div className="flex bg-zinc-200 p-1 rounded-2xl mb-6">
+                      {['pendente', 'preparando', 'finalizado'].map(tab => (
+                        <button key={tab} onClick={() => setOrderFilter(tab)} className={`flex-1 py-2.5 rounded-xl text-sm font-bold ${orderFilter === tab ? 'bg-amber-500 text-black' : 'text-zinc-500'}`}>
+                          {tab === 'pendente' ? 'Novos' : tab === 'preparando' ? 'Cozinha' : 'Prontos'}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="space-y-4">
+                      {orders.filter(o => o.status === orderFilter).map(order => (
+                        <div key={order.id} className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-200">
+                          <h3 className="font-black text-lg">{order.customerName}</h3>
+                          <div className="bg-zinc-50 rounded-2xl p-4 my-4">
+                            {order.items.map((item, idx) => (
+                              <div key={idx} className="text-sm py-1"><span className="font-black mr-1">{item.quantity}x</span> {item.name}</div>
+                            ))}
+                          </div>
+                          <div className="flex gap-2">
+                            <button onClick={() => printOrder(order)} className="w-12 h-12 bg-zinc-100 rounded-2xl flex items-center justify-center text-xl">🖨️</button>
+                            {order.status === 'pendente' && <button onClick={() => handleUpdateOrderStatus(order.id, 'preparando')} className="flex-1 bg-amber-500 font-black rounded-2xl">Preparar</button>}
+                            {order.status === 'preparando' && <button onClick={() => handleUpdateOrderStatus(order.id, 'finalizado')} className="flex-1 bg-green-500 text-white font-black rounded-2xl">Finalizar</button>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {pdvTab === 'products' && (
+                  <div className="p-4">
+                    {products.map(product => (
+                      <div key={product.id} className="bg-white p-3 rounded-2xl flex gap-4 mb-3 border border-zinc-200 items-center">
+                        <div className="flex-1">
+                          <h4 className="font-bold text-sm">{product.name}</h4>
+                          <p className="text-sm font-black mt-1">R$ {parseFloat(product.price).toFixed(2)}</p>
+                        </div>
+                        <button onClick={() => handleDeleteProduct(product.id)} className="p-3 bg-red-50 text-red-500 rounded-xl">🗑️</button>
+                      </div>
+                    ))}
+                    <button onClick={() => setIsAddProductModalOpen(true)} className="fixed bottom-24 right-6 w-14 h-14 bg-zinc-900 text-white rounded-full text-2xl flex items-center justify-center">➕</button>
+                  </div>
+                )}
+              </main>
+
+              {isAddProductModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60">
+                  <div className="bg-white w-full max-w-md rounded-t-[2rem] p-6 relative z-10 h-[8
