@@ -57,7 +57,7 @@
       const [view, setView] = useState('menu');
       const [products, setProducts] = useState([]);
       const [orders, setOrders] = useState([]);
-      const [deliveryFee, setDeliveryFee] = useState(5.00); // Taxa padrão inicial
+      const [deliveryFee, setDeliveryFee] = useState(5.00);
       const [loading, setLoading] = useState(true);
 
       const [cart, setCart] = useState([]);
@@ -104,7 +104,6 @@
           setLoading(false);
         });
 
-        // Sincroniza a taxa de entrega em tempo real
         const unsubConfig = onSnapshot(doc(db, 'settings', 'config'), (docSnap) => {
           if (docSnap.exists()) {
             const fee = docSnap.data().fee || 5.00;
@@ -137,6 +136,13 @@
         } catch (error) {
           alert("Erro ao salvar taxa.");
         }
+      };
+
+      // Função para pausar ou ativar o produto
+      const handleTogglePause = async (product) => {
+        const { db, doc, updateDoc } = window.firebaseAPI;
+        const newPausedState = !product.paused;
+        await updateDoc(doc(db, 'products', product.id), { paused: newPausedState });
       };
 
       const addToCart = (product) => {
@@ -202,7 +208,7 @@
         if (!newProduct.name || !newProduct.price) return;
         try {
           const { db, collection, addDoc } = window.firebaseAPI;
-          await addDoc(collection(db, 'products'), { ...newProduct, price: parseFloat(newProduct.price), createdAt: Date.now() });
+          await addDoc(collection(db, 'products'), { ...newProduct, price: parseFloat(newProduct.price), paused: false, createdAt: Date.now() });
           setNewProduct({ name: '', price: '', category: 'Burgers', description: '', imageUrl: '' });
           setIsAddProductModalOpen(false);
         } catch (error) { console.error(error); }
@@ -240,6 +246,7 @@
         }
       };
 
+      // Notinha otimizada com Endereço Grande no Final para o Entregador
       const printOrder = (order) => {
         const subtotal = order.subtotal !== undefined ? order.subtotal : (order.total - (order.deliveryFee || 0));
         const fee = order.deliveryFee !== undefined ? order.deliveryFee : 0;
@@ -254,8 +261,11 @@
             .text-center { text-align: center; }
             .border-b { border-bottom: 1px dashed black; margin-bottom: 10px; padding-bottom: 10px; }
             table { width: 100%; margin: 10px 0; border-collapse: collapse; }
-            td { vertical-align: top; padding: 2px 0; }
+            td { vertical-align: top; padding: 3px 0; }
             .text-right { text-align: right; }
+            .address-box { margin-top: 15px; border-top: 2px dashed black; padding-top: 10px; }
+            .address-title { font-size: 12px; font-weight: bold; margin-bottom: 2px; }
+            .address-text { font-size: 16px; font-weight: bold; line-height: 1.2; }
           </style>
           </head><body>
             <div class="container">
@@ -264,17 +274,16 @@
                 <p style="margin:5px 0 0 0;">Pedido #${order.id.substring(0, 5).toUpperCase()}</p>
                 <p style="margin:2px 0 0 0;">${new Date(order.createdAt).toLocaleString('pt-BR')}</p>
               </div>
-              <div class="border-b">
-                <p style="margin:2px 0;"><strong>Cliente:</strong> ${order.customerName}</p>
-                ${order.customerPhone ? `<p style="margin:2px 0;"><strong>Tel:</strong> ${order.customerPhone}</p>` : ''}
-                ${order.customerAddress ? `<p style="margin:2px 0;"><strong>Endereço:</strong> ${order.customerAddress}</p>` : ''}
+              <div class="border-b" style="font-size: 16px;">
+                <p style="margin:3px 0;"><strong>Cliente:</strong> ${order.customerName}</p>
+                ${order.customerPhone ? `<p style="margin:3px 0;"><strong>Tel:</strong> ${order.customerPhone}</p>` : ''}
               </div>
               <table>
                 ${order.items.map(item => `
                   <tr>
-                    <td style="width: 15%;"><strong>${item.quantity}x</strong></td>
-                    <td>${item.name}</td>
-                    <td class="text-right">R$${(item.price * item.quantity).toFixed(2)}</td>
+                    <td style="width: 15%; font-size: 15px;"><strong>${item.quantity}x</strong></td>
+                    <td style="font-size: 15px;">${item.name}</td>
+                    <td class="text-right" style="font-size: 15px;">R$${(item.price * item.quantity).toFixed(2)}</td>
                   </tr>
                 `).join('')}
               </table>
@@ -282,9 +291,15 @@
                 <div style="display: flex; justify-content: space-between;"><span>Subtotal:</span><span>R$ ${subtotal.toFixed(2)}</span></div>
                 <div style="display: flex; justify-content: space-between;"><span>Taxa Entrega:</span><span>R$ ${fee.toFixed(2)}</span></div>
               </div>
-              <div class="text-right" style="margin-top: 5px; border-top: 1px dashed black; padding-top: 5px; font-size: 16px;">
-                <strong>TOTAL: R$ ${order.total.toFixed(2)}</strong>
+              <div class="text-right" style="margin-top: 5px; border-top: 1px dashed black; padding-top: 5px; font-size: 18px; font-weight: bold;">
+                TOTAL: R$ ${order.total.toFixed(2)}
               </div>
+              ${order.customerAddress ? `
+                <div class="address-box">
+                  <div class="address-title">ENDEREÇO DE ENTREGA:</div>
+                  <div class="address-text">${order.customerAddress}</div>
+                </div>
+              ` : ''}
             </div>
           </body></html>
         `;
@@ -315,7 +330,10 @@
       if (loading) return <div className="min-h-screen flex items-center justify-center font-bold text-amber-500 animate-pulse">Conectando ao banco de dados...</div>;
 
       const categories = ['Todos', 'Burgers', 'Porções', 'Bebidas', 'Sobremesas'];
-      const filteredProducts = activeCategory === 'Todos' ? products : products.filter(p => p.category === activeCategory);
+      
+      // Filtra produtos por categoria e esconde os que estão pausados para o cliente
+      const filteredProducts = (activeCategory === 'Todos' ? products : products.filter(p => p.category === activeCategory))
+        .filter(p => !p.paused);
 
       return (
         <div className="min-h-screen relative pb-20 w-full overflow-x-hidden font-sans">
@@ -362,7 +380,7 @@
                   </div>
                 ))}
                 {filteredProducts.length === 0 && (
-                  <div className="text-center text-zinc-500 mt-10">Nenhum produto cadastrado nesta categoria.</div>
+                  <div className="text-center text-zinc-500 mt-10">Nenhum produto disponível nesta categoria no momento.</div>
                 )}
               </main>
 
@@ -427,7 +445,6 @@
                         </div>
                       ))}
 
-                      {/* Resumo de Subtotal, Taxa de Entrega e Total */}
                       <div className="bg-zinc-950 p-4 rounded-2xl border border-zinc-800 space-y-2 text-sm text-zinc-300">
                         <div className="flex justify-between"><span>Subtotal dos itens:</span> <span>R$ {itemsTotal.toFixed(2)}</span></div>
                         <div className="flex justify-between"><span>Taxa de Entrega:</span> <span>R$ {deliveryFee.toFixed(2)}</span></div>
@@ -513,22 +530,34 @@
                   </div>
                 )}
 
+                {/* Aba de Produtos com Botão de Pausar */}
                 {pdvTab === 'products' && (
                   <div className="p-4">
                     {products.map(product => (
-                      <div key={product.id} className="bg-white p-3 rounded-2xl flex gap-4 mb-3 border border-zinc-200 items-center">
+                      <div key={product.id} className={`bg-white p-3 rounded-2xl flex gap-4 mb-3 border items-center ${product.paused ? 'border-amber-400 bg-amber-50/50 opacity-75' : 'border-zinc-200'}`}>
                         <div className="flex-1">
-                          <h4 className="font-bold text-sm">{product.name}</h4>
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-bold text-sm">{product.name}</h4>
+                            {product.paused && <span className="bg-amber-200 text-amber-900 text-[10px] font-black px-2 py-0.5 rounded-full uppercase">Pausado</span>}
+                          </div>
                           <p className="text-sm font-black mt-1">R$ {parseFloat(product.price).toFixed(2)}</p>
                         </div>
+                        
+                        {/* Botão de Pausar / Ativar */}
+                        <button onClick={() => handleTogglePause(product)} className={`px-3 py-2 rounded-xl text-xs font-bold transition-colors ${product.paused ? 'bg-amber-500 text-black shadow-sm' : 'bg-zinc-200 text-zinc-700'}`}>
+                          {product.paused ? '▶️ Ativar' : '⏸️ Pausar'}
+                        </button>
+                        
                         <button onClick={() => handleDeleteProduct(product.id)} className="p-3 bg-red-50 text-red-500 rounded-xl">🗑️</button>
                       </div>
                     ))}
+                    {products.length === 0 && (
+                      <div className="text-center text-zinc-400 mt-10">Nenhum produto cadastrado.</div>
+                    )}
                     <button onClick={() => setIsAddProductModalOpen(true)} className="fixed bottom-24 right-6 w-14 h-14 bg-zinc-900 text-white rounded-full text-2xl flex items-center justify-center shadow-lg">➕</button>
                   </div>
                 )}
 
-                {/* Nova Aba de Ajustes / Taxa de Entrega */}
                 {pdvTab === 'config' && (
                   <div className="p-6">
                     <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200">
@@ -574,7 +603,6 @@
                 </div>
               )}
 
-              {/* Menu Inferior do PDV com 3 Abas */}
               <nav className="fixed bottom-0 w-full max-w-md bg-white border-t border-zinc-200 z-30">
                 <div className="flex justify-around p-3">
                   <button onClick={() => setPdvTab('orders')} className={`font-bold p-2 text-sm ${pdvTab === 'orders' ? 'text-amber-500' : 'text-zinc-400'}`}>Pedidos</button>
