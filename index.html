@@ -70,7 +70,11 @@
       const [cart, setCart] = useState([]);
       const [isCartOpen, setIsCartOpen] = useState(false);
       const [selectedProduct, setSelectedProduct] = useState(null);
+      
       const [customerName, setCustomerName] = useState("");
+      const [customerPhone, setCustomerPhone] = useState("");
+      const [customerAddress, setCustomerAddress] = useState(""); // Novo campo Endereço
+      
       const [activeCategory, setActiveCategory] = useState("Todos");
       const [pdvTab, setPdvTab] = useState('orders');
       const [orderFilter, setOrderFilter] = useState('pendente');
@@ -135,21 +139,23 @@
       const handleCheckout = async () => {
         if (cart.length === 0) return;
         if (!customerName.trim()) return alert("Por favor, insira seu nome.");
+        if (!customerPhone.trim()) return alert("Por favor, insira seu WhatsApp (número de telefone).");
+        if (!customerAddress.trim()) return alert("Por favor, insira seu endereço para entrega."); // Trava do endereço
 
-        let text = `*Novo Pedido - Malaguti Brothers*\n\n*Cliente:* ${customerName}\n\n*Itens:*\n`;
+        let text = `*Novo Pedido - Malaguti Brothers*\n\n*Cliente:* ${customerName}\n*Telefone:* ${customerPhone}\n*Endereço:* ${customerAddress}\n\n*Itens:*\n`;
         cart.forEach(item => {
           text += `${item.quantity}x ${item.name} - R$ ${(parseFloat(item.price) * item.quantity).toFixed(2)}\n`;
         });
-        text += `\n*Total:* R$ ${cartTotal.toFixed(2)}\n\n_Zapia, confirme o endereço e forma de pagamento._`;
+        text += `\n*Total:* R$ ${cartTotal.toFixed(2)}\n\n_Confirme a forma de pagamento._`;
 
         try {
           const { db, collection, addDoc } = window.firebaseAPI;
           await addDoc(collection(db, 'orders'), {
-            customerName, phone: WHATSAPP_NUMBER, items: cart, total: cartTotal, status: 'pendente', source: 'whatsapp_zapia', createdAt: Date.now()
+            customerName, customerPhone, customerAddress, phone: WHATSAPP_NUMBER, items: cart, total: cartTotal, status: 'pendente', source: 'whatsapp', createdAt: Date.now()
           });
           const waUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
           window.open(waUrl, '_blank');
-          setCart([]); setIsCartOpen(false); setCustomerName("");
+          setCart([]); setIsCartOpen(false); setCustomerName(""); setCustomerPhone(""); setCustomerAddress("");
         } catch (error) { alert("Erro ao gerar pedido."); }
       };
 
@@ -181,6 +187,21 @@
         await updateDoc(doc(db, 'orders', orderId), { status: newStatus });
       };
 
+      const handleFinishAndNotify = async (order) => {
+        await handleUpdateOrderStatus(order.id, 'finalizado');
+        
+        if (order.customerPhone) {
+          let foneLimpo = order.customerPhone.replace(/\D/g, ''); 
+          if (!foneLimpo.startsWith('55') && foneLimpo.length <= 11) {
+            foneLimpo = '55' + foneLimpo; 
+          }
+          
+          const mensagem = `Olá ${order.customerName}, o seu pedido ficou pronto e nos próximos instantes sairá para entrega. Obrigado pelo seu pedido e que DEUS o abençoe. 🙏🍔`;
+          const zapUrl = `https://wa.me/${foneLimpo}?text=${encodeURIComponent(mensagem)}`;
+          window.open(zapUrl, '_blank');
+        }
+      };
+
       const printOrder = (order) => {
         const printArea = document.getElementById('print-area');
         let html = `
@@ -191,6 +212,8 @@
           </div>
           <div style="margin: 10px 0; border-bottom: 1px dashed black; padding-bottom: 10px;">
             <p style="margin:2px 0;"><strong>Cliente:</strong> ${order.customerName}</p>
+            ${order.customerPhone ? `<p style="margin:2px 0;"><strong>Telefone:</strong> ${order.customerPhone}</p>` : ''}
+            ${order.customerAddress ? `<p style="margin:2px 0;"><strong>Endereço:</strong> ${order.customerAddress}</p>` : ''}
           </div>
           <table style="width: 100%; margin: 10px 0;">
         `;
@@ -204,7 +227,10 @@
           </div>
         `;
         printArea.innerHTML = html;
-        window.print();
+        
+        setTimeout(() => {
+          window.print();
+        }, 300);
       };
 
       if (loading) return <div className="min-h-screen flex items-center justify-center font-bold text-amber-500 animate-pulse">Conectando ao banco de dados...</div>;
@@ -261,7 +287,6 @@
                 )}
               </main>
 
-              {/* Modal de Detalhes do Produto */}
               {selectedProduct && (
                 <div className="fixed inset-0 z-50 flex items-end justify-center">
                   <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setSelectedProduct(null)}></div>
@@ -323,10 +348,15 @@
                         </div>
                       ))}
                     </div>
+                    
+                    {/* Campos de Nome, Telefone e Endereço do Cliente */}
                     <div className="p-6 bg-zinc-950 border-t border-zinc-800 rounded-t-3xl">
-                      <input type="text" value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Seu nome" className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl px-5 py-4 text-white mb-4" />
+                      <input type="text" value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Seu nome" className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl px-5 py-3 text-white mb-3" />
+                      <input type="tel" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="Seu WhatsApp (Ex: 11999999999)" className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl px-5 py-3 text-white mb-3" />
+                      <input type="text" value={customerAddress} onChange={(e) => setCustomerAddress(e.target.value)} placeholder="Endereço para entrega" className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl px-5 py-3 text-white mb-4" />
+                      
                       <button onClick={handleCheckout} className="w-full bg-[#25D366] text-white py-4 rounded-2xl font-black text-lg flex items-center justify-center gap-3">
-                        💬 Enviar via Zapia
+                        💬 Enviar Pedido
                       </button>
                     </div>
                   </div>
@@ -358,6 +388,9 @@
                       {orders.filter(o => o.status === orderFilter).map(order => (
                         <div key={order.id} className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-200">
                           <h3 className="font-black text-lg">{order.customerName}</h3>
+                          {order.customerPhone && <p className="text-xs text-zinc-500 mt-1">📱 {order.customerPhone}</p>}
+                          {order.customerAddress && <p className="text-xs text-zinc-500 mt-1 leading-tight">📍 {order.customerAddress}</p>}
+                          
                           <div className="bg-zinc-50 rounded-2xl p-4 my-4">
                             {order.items.map((item, idx) => (
                               <div key={idx} className="text-sm py-1"><span className="font-black mr-1">{item.quantity}x</span> {item.name}</div>
@@ -368,7 +401,8 @@
                             <button onClick={() => handleDeleteOrder(order.id)} className="w-12 h-12 bg-red-100 text-red-500 rounded-2xl flex items-center justify-center text-xl">🗑️</button>
                             
                             {order.status === 'pendente' && <button onClick={() => handleUpdateOrderStatus(order.id, 'preparando')} className="flex-1 bg-amber-500 font-black rounded-2xl">Preparar</button>}
-                            {order.status === 'preparando' && <button onClick={() => handleUpdateOrderStatus(order.id, 'finalizado')} className="flex-1 bg-green-500 text-white font-black rounded-2xl">Finalizar</button>}
+                            
+                            {order.status === 'preparando' && <button onClick={() => handleFinishAndNotify(order)} className="flex-1 bg-[#25D366] text-white font-black rounded-2xl text-sm leading-tight">Finalizar & Avisar</button>}
                           </div>
                         </div>
                       ))}
