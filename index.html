@@ -55,6 +55,30 @@
     const WHATSAPP_NUMBER = "5511999999999"; 
     const LOGO_URL = "https://cdn-icons-png.flaticon.com/512/3014/3014491.png"; 
 
+    // Função global de bipe sonoro (Web Audio API)
+    const playBeep = () => {
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // Frequência de bipe claro
+        oscillator.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.4);
+        
+        gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        
+        oscillator.start();
+        oscillator.stop(audioCtx.currentTime + 0.4);
+      } catch (e) {
+        console.log("Áudio bloqueado:", e);
+      }
+    };
+
     function App() {
       const [view, setView] = useState('menu');
       const [products, setProducts] = useState([]);
@@ -107,7 +131,6 @@
       const [analysisStartDate, setAnalysisStartDate] = useState("");
       const [analysisEndDate, setAnalysisEndDate] = useState("");
 
-      // Ref para acompanhar em qual tela estamos, para não apitar para o cliente
       const viewRef = useRef(view);
       useEffect(() => { viewRef.current = view; }, [view]);
 
@@ -120,15 +143,12 @@
           setLoading(false);
         }, (err) => { console.error(err); setLoading(false); });
 
-        // Controle para não apitar ao carregar a página pela primeira vez
         let isInitialOrdersLoad = true;
         const unsubOrders = onSnapshot(collection(db, 'orders'), (snap) => {
-          // Se estamos no PDV e não é o carregamento inicial, e houve uma adição de pedido:
           if (!isInitialOrdersLoad && viewRef.current === 'pdv') {
             const hasNewOrder = snap.docChanges().some(change => change.type === 'added');
             if (hasNewOrder) {
-              const audio = new Audio('https://actions.google.com/sounds/v1/alarms/positive_beeps.ogg');
-              audio.play().catch(e => console.log('Áudio bloqueado pelo navegador:', e));
+              playBeep();
             }
           }
           isInitialOrdersLoad = false;
@@ -180,6 +200,7 @@
       const handlePdvAccess = () => {
         const senha = prompt("Digite a senha de acesso ao sistema:");
         if (senha === "1234") {
+          playBeep(); // Desbloqueia o áudio ao entrar no PDV
           setView('pdv');
         } else if (senha !== null) {
           alert("Senha incorreta! Acesso negado.");
@@ -966,6 +987,10 @@
                   <h1 className="text-xl font-black uppercase leading-none">PDV Mobile</h1>
                   <span className="text-[10px] text-amber-500 font-bold uppercase">Malaguti Brothers</span>
                 </div>
+                {/* Botão para testar o som do alarme manualmente */}
+                <button onClick={playBeep} className="bg-zinc-800 border border-zinc-700 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-transform">
+                  🔊 Testar Som
+                </button>
               </header>
 
               <main className="flex-1 overflow-y-auto pb-24">
@@ -1233,17 +1258,6 @@
                               ))}
                             </div>
                           )}
-                        </div>
-
-                        <h4 className="font-bold text-sm uppercase text-zinc-600 pt-2">Produtos vendidos hoje:</h4>
-                        <div className="space-y-1.5 max-h-36 overflow-y-auto">
-                          {Object.entries(productSalesCount).map(([prodName, qty]) => (
-                            <div key={prodName} className="flex justify-between items-center bg-zinc-50 px-3 py-2 rounded-xl border border-zinc-200 text-xs">
-                              <span className="font-medium text-zinc-800">{prodName}</span>
-                              <span className="font-black bg-zinc-200 px-2 py-0.5 rounded-full">{qty} un</span>
-                            </div>
-                          ))}
-                          {Object.keys(productSalesCount).length === 0 && <p className="text-xs text-zinc-400 text-center py-2">Nenhuma venda nesta sessão.</p>}
                         </div>
 
                         <button onClick={handleCloseCash} className="w-full bg-red-600 text-white font-black py-4 rounded-2xl shadow-md text-sm mt-4">
