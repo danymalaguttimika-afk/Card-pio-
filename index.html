@@ -93,6 +93,10 @@
       const [pixInput, setPixInput] = useState("11999999999");
       const [openingChangeInput, setOpeningChangeInput] = useState("0.00");
       
+      // Estados para Retirada / Sangria
+      const [withdrawalAmount, setWithdrawalAmount] = useState("");
+      const [withdrawalReason, setWithdrawalReason] = useState("");
+
       const [newAddonName, setNewAddonName] = useState("");
       const [newAddonPrice, setNewAddonPrice] = useState("");
 
@@ -177,10 +181,50 @@
             totalSales: 0,
             pixSales: 0,
             cardSales: 0,
-            cashSales: 0
+            cashSales: 0,
+            withdrawals: []
           });
           alert("Caixa aberto com sucesso!");
         } catch (error) { alert("Erro ao abrir caixa."); }
+      };
+
+      const handleAddWithdrawal = async (e) => {
+        e.preventDefault();
+        if (!currentCash) return;
+        const amount = parseFloat(withdrawalAmount);
+        const reason = withdrawalReason.trim();
+
+        if (isNaN(amount) || amount <= 0) return alert("Digite um valor válido para a retirada.");
+        if (!reason) return alert("Digite o motivo da retirada (Ex: Gasolina, Mercado).");
+
+        const existingWithdrawals = currentCash.withdrawals || [];
+        const newWithdrawal = { id: Date.now(), amount, reason, createdAt: Date.now() };
+        const updatedWithdrawals = [...existingWithdrawals, newWithdrawal];
+
+        try {
+          const { db, doc, updateDoc } = window.firebaseAPI;
+          await updateDoc(doc(db, 'cash_registers', currentCash.id), {
+            withdrawals: updatedWithdrawals
+          });
+          setWithdrawalAmount("");
+          setWithdrawalReason("");
+        } catch (error) {
+          console.error(error);
+          alert("Erro ao registrar retirada.");
+        }
+      };
+
+      const handleDeleteWithdrawal = async (withdrawalId) => {
+        if (!window.confirm("Deseja apagar este registro de retirada?")) return;
+        const updatedWithdrawals = (currentCash.withdrawals || []).filter(w => w.id !== withdrawalId);
+        try {
+          const { db, doc, updateDoc } = window.firebaseAPI;
+          await updateDoc(doc(db, 'cash_registers', currentCash.id), {
+            withdrawals: updatedWithdrawals
+          });
+        } catch (error) {
+          console.error(error);
+        }
       };
 
       const handleCloseCash = async () => {
@@ -192,6 +236,7 @@
         const pixSales = sessionOrders.filter(o => o.paymentMethod === 'Pix').reduce((acc, o) => acc + (o.total || 0), 0);
         const cardSales = sessionOrders.filter(o => o.paymentMethod === 'Cartão').reduce((acc, o) => acc + (o.total || 0), 0);
         const cashSales = sessionOrders.filter(o => o.paymentMethod === 'Dinheiro').reduce((acc, o) => acc + (o.total || 0), 0);
+        const totalWithdrawals = (currentCash.withdrawals || []).reduce((acc, w) => acc + w.amount, 0);
 
         try {
           const { db, doc, updateDoc } = window.firebaseAPI;
@@ -201,7 +246,8 @@
             totalSales,
             pixSales,
             cardSales,
-            cashSales
+            cashSales,
+            totalWithdrawals
           });
           alert("Caixa fechado com sucesso!");
         } catch (error) { alert("Erro ao fechar caixa."); }
@@ -269,7 +315,6 @@
         await updateDoc(doc(db, 'products', product.id), { paused: !product.paused });
       };
 
-      // Função para compactar e converter a foto da câmera/galeria para Base64
       const handleImageUpload = (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -539,7 +584,9 @@
       const sessionPix = activeSessionOrders.filter(o => o.paymentMethod === 'Pix').reduce((acc, o) => acc + (o.total || 0), 0);
       const sessionCard = activeSessionOrders.filter(o => o.paymentMethod === 'Cartão').reduce((acc, o) => acc + (o.total || 0), 0);
       const sessionCash = activeSessionOrders.filter(o => o.paymentMethod === 'Dinheiro').reduce((acc, o) => acc + (o.total || 0), 0);
-      const expectedCashInDrawer = (currentCash?.openingChange || 0) + sessionCash;
+      
+      const totalWithdrawals = (currentCash?.withdrawals || []).reduce((acc, w) => acc + w.amount, 0);
+      const expectedCashInDrawer = (currentCash?.openingChange || 0) + sessionCash - totalWithdrawals;
 
       const closedCashRegisters = cashRegisters.filter(c => c.status === 'fechado');
       const monthlyRevenue = closedCashRegisters.reduce((acc, c) => acc + (c.totalSales || 0), 0);
@@ -978,6 +1025,7 @@
                   </div>
                 )}
 
+                {/* Aba de Caixa com Retiradas / Sangrias */}
                 {pdvTab === 'cash' && (
                   <div className="p-4 space-y-4">
                     {!currentCash ? (
@@ -1059,12 +1107,58 @@
                           </div>
                         </div>
 
-                        <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-200 space-y-1 text-xs">
+                        <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-200 space-y-1.5 text-xs">
                           <div className="flex justify-between"><span>Troco Inicial (Fundo):</span> <span className="font-bold">R$ {currentCash.openingChange.toFixed(2)}</span></div>
                           <div className="flex justify-between"><span>Dinheiro em Vendas:</span> <span className="font-bold">R$ {sessionCash.toFixed(2)}</span></div>
-                          <div className="flex justify-between font-black text-sm text-zinc-900 pt-1 border-t border-zinc-200">
+                          <div className="flex justify-between text-red-600"><span>(-) Total de Retiradas:</span> <span className="font-bold">- R$ {totalWithdrawals.toFixed(2)}</span></div>
+                          <div className="flex justify-between font-black text-sm text-zinc-900 pt-2 border-t border-zinc-200">
                             <span>Total Esperado na Gaveta:</span> <span className="text-amber-600">R$ {expectedCashInDrawer.toFixed(2)}</span>
                           </div>
+                        </div>
+
+                        {/* Formulário para Registrar Retirada (Sangria) */}
+                        <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-200 space-y-3">
+                          <h4 className="font-bold text-xs uppercase text-zinc-700">💸 Registrar Retirada (Sangria / Despesa):</h4>
+                          <form onSubmit={handleAddWithdrawal} className="space-y-2">
+                            <input 
+                              type="text" 
+                              value={withdrawalReason} 
+                              onChange={(e) => setWithdrawalReason(e.target.value)} 
+                              placeholder="Motivo (Ex: Gasolina moto, Mercado)" 
+                              className="w-full bg-white border border-zinc-300 rounded-xl px-3 py-2.5 text-xs text-zinc-800"
+                              required 
+                            />
+                            <div className="flex gap-2">
+                              <input 
+                                type="number" 
+                                step="0.50" 
+                                value={withdrawalAmount} 
+                                onChange={(e) => setWithdrawalAmount(e.target.value)} 
+                                placeholder="Valor (R$)" 
+                                className="flex-1 bg-white border border-zinc-300 rounded-xl px-3 py-2.5 text-xs text-zinc-800 font-bold"
+                                required 
+                              />
+                              <button type="submit" className="bg-zinc-900 text-white font-black px-4 py-2.5 rounded-xl text-xs">Retirar</button>
+                            </div>
+                          </form>
+
+                          {currentCash.withdrawals && currentCash.withdrawals.length > 0 && (
+                            <div className="space-y-1.5 pt-2 border-t border-zinc-200 mt-2">
+                              <span className="text-[10px] font-bold text-zinc-500 uppercase">Retiradas feitas hoje:</span>
+                              {currentCash.withdrawals.map(w => (
+                                <div key={w.id} className="flex justify-between items-center bg-white px-3 py-2 rounded-xl border border-zinc-200 text-xs">
+                                  <div>
+                                    <span className="font-bold text-zinc-800">{w.reason}</span>
+                                    <span className="text-[10px] text-zinc-400 block">{new Date(w.createdAt).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-black text-red-600">- R$ {w.amount.toFixed(2)}</span>
+                                    <button type="button" onClick={() => handleDeleteWithdrawal(w.id)} className="text-red-400 hover:text-red-600 text-sm">✖️</button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
 
                         <h4 className="font-bold text-sm uppercase text-zinc-600 pt-2">Produtos vendidos hoje:</h4>
@@ -1159,7 +1253,6 @@
 
                       <input required type="number" step="0.50" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4 text-sm" placeholder="Preço (Ex: 35.00)" />
                       
-                      {/* Seletor de Foto Nativo (Câmera ou Galeria) */}
                       <div className="bg-zinc-50 border border-zinc-200 rounded-2xl p-4 space-y-3">
                         <label className="block text-xs font-bold text-zinc-600 uppercase">Foto do Produto:</label>
                         <div className="flex items-center gap-4">
