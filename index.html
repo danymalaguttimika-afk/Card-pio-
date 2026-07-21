@@ -96,6 +96,10 @@
       const [newAddonName, setNewAddonName] = useState("");
       const [newAddonPrice, setNewAddonPrice] = useState("");
 
+      // Estados para Gestão de Leads e Campanhas
+      const [leadFilter, setLeadFilter] = useState('all'); // all, loyal, churned
+      const [promoTemplate, setPromoTemplate] = useState("Olá [Nome]! Tudo bem? Passando para avisar que hoje o cardápio da Malaguti Brothers está recheado de delícias. Que tal pedir seu lanche favorito agora? 🍔🔥");
+
       useEffect(() => {
         const { db, collection, onSnapshot, doc } = window.firebaseAPI;
         if (!db) { setLoading(false); return; }
@@ -295,7 +299,6 @@
         setProductNote("");
       };
 
-      // Atualiza quantidade e remove o item se chegar a 0 ou menos
       const updateQuantity = (cartItemId, delta) => {
         setCart(prev => {
           return prev.map(item => {
@@ -511,18 +514,42 @@
         }
       });
 
+      // Extração inteligente de Leads (Clientes) com contagem de pedidos e inatividade (dias sem pedir)
       const uniqueClientsMap = {};
       orders.forEach(o => {
         if (o.customerPhone) {
-          uniqueClientsMap[o.customerPhone] = {
-            name: o.customerName,
-            phone: o.customerPhone,
-            address: o.customerAddress,
-            ordersCount: (uniqueClientsMap[o.customerPhone]?.ordersCount || 0) + 1
-          };
+          const phoneClean = o.customerPhone.trim();
+          if (!uniqueClientsMap[phoneClean]) {
+            uniqueClientsMap[phoneClean] = {
+              name: o.customerName,
+              phone: phoneClean,
+              address: o.customerAddress,
+              ordersCount: 0,
+              lastOrderAt: 0
+            };
+          }
+          uniqueClientsMap[phoneClean].ordersCount += 1;
+          if (o.createdAt > uniqueClientsMap[phoneClean].lastOrderAt) {
+            uniqueClientsMap[phoneClean].lastOrderAt = o.createdAt;
+            uniqueClientsMap[phoneClean].name = o.customerName;
+            uniqueClientsMap[phoneClean].address = o.customerAddress;
+          }
         }
       });
-      const uniqueClients = Object.values(uniqueClientsMap);
+
+      const now = Date.now();
+      const uniqueClients = Object.values(uniqueClientsMap).map(c => {
+        const daysAgo = c.lastOrderAt ? Math.floor((now - c.lastOrderAt) / (1000 * 60 * 60 * 24)) : 0;
+        return { ...c, daysAgo };
+      });
+      uniqueClients.sort((a, b) => b.lastOrderAt - a.lastOrderAt);
+
+      // Filtragem de Leads
+      const displayedClients = uniqueClients.filter(c => {
+        if (leadFilter === 'loyal') return c.ordersCount >= 2;
+        if (leadFilter === 'churned') return c.daysAgo >= 15;
+        return true;
+      });
 
       return (
         <div className="min-h-screen relative pb-20 w-full overflow-x-hidden font-sans">
@@ -856,30 +883,61 @@
                   </div>
                 )}
 
+                {/* Aba de Clientes & Campanhas de Promoção em Massa */}
                 {pdvTab === 'clients' && (
                   <div className="p-4 space-y-4">
-                    <div className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-200">
-                      <h3 className="font-black text-lg mb-1">👥 Base de Clientes (Leads)</h3>
-                      <p className="text-xs text-zinc-500 mb-4">Contatos capturados automaticamente para campanhas de recorrência no WhatsApp.</p>
+                    {/* Painel de Disparo de Promoções */}
+                    <div className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-200 space-y-3">
+                      <h3 className="font-black text-base flex items-center gap-2">📢 Campanhas de WhatsApp</h3>
+                      <p className="text-xs text-zinc-500 leading-tight">Escreva sua mensagem abaixo. A tag <code className="bg-zinc-100 text-amber-600 px-1 py-0.5 rounded font-mono font-bold">[Nome]</code> será substituída automaticamente pelo nome de cada cliente ao clicar em chamar.</p>
                       
-                      <div className="space-y-3">
-                        {uniqueClients.map(client => (
-                          <div key={client.phone} className="bg-zinc-50 p-3 rounded-2xl border border-zinc-200 flex justify-between items-center">
-                            <div>
-                              <h4 className="font-bold text-sm">{client.name}</h4>
-                              <p className="text-xs text-zinc-500">📱 {client.phone} • {client.ordersCount} {client.ordersCount === 1 ? 'pedido' : 'pedidos'}</p>
+                      <textarea 
+                        value={promoTemplate} 
+                        onChange={(e) => setPromoTemplate(e.target.value)} 
+                        className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-3 text-xs text-zinc-800 h-24 focus:outline-none focus:border-amber-500 font-sans" 
+                      />
+
+                      {/* Filtros de Leads */}
+                      <div className="flex bg-zinc-100 p-1 rounded-2xl">
+                        <button onClick={() => setLeadFilter('all')} className={`flex-1 py-2 rounded-xl text-xs font-bold ${leadFilter === 'all' ? 'bg-amber-500 text-black' : 'text-zinc-500'}`}>Todos ({uniqueClients.length})</button>
+                        <button onClick={() => setLeadFilter('loyal')} className={`flex-1 py-2 rounded-xl text-xs font-bold ${leadFilter === 'loyal' ? 'bg-amber-500 text-black' : 'text-zinc-500'}`}>Fiéis (2+)</button>
+                        <button onClick={() => setLeadFilter('churned')} className={`flex-1 py-2 rounded-xl text-xs font-bold ${leadFilter === 'churned' ? 'bg-red-500 text-white' : 'text-zinc-500'}`}>Sumidos (&gt;15d)</button>
+                      </div>
+                    </div>
+
+                    {/* Lista de Leads */}
+                    <div className="space-y-3">
+                      {displayedClients.map(client => {
+                        const customMsg = promoTemplate.replace(/\[Nome\]/g, client.name);
+                        const cleanPhone = client.phone.replace(/\D/g, '');
+                        const waLink = `https://wa.me/55${cleanPhone}?text=${encodeURIComponent(customMsg)}`;
+                        
+                        return (
+                          <div key={client.phone} className="bg-white p-4 rounded-3xl border border-zinc-200 shadow-sm flex flex-col gap-2">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <h4 className="font-black text-base text-zinc-900">{client.name}</h4>
+                                <p className="text-xs text-zinc-500">📱 {client.phone}</p>
+                              </div>
+                              <div className="flex flex-col items-end">
+                                <span className="bg-amber-100 text-amber-900 font-black text-[10px] px-2.5 py-0.5 rounded-full mb-1">{client.ordersCount} {client.ordersCount === 1 ? 'pedido' : 'pedidos'}</span>
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${client.daysAgo >= 15 ? 'bg-red-100 text-red-700' : 'bg-zinc-100 text-zinc-600'}`}>
+                                  {client.daysAgo === 0 ? 'Pediu hoje' : `Sumido há ${client.daysAgo}d`}
+                                </span>
+                              </div>
                             </div>
+
                             <a 
-                              href={`https://wa.me/55${client.phone.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${client.name}, tudo bem? Aqui é da Malaguti Brothers! Estamos com novidades hoje no cardápio, que tal pedir o seu lanche favorito? 🍔`)}`} 
+                              href={waLink} 
                               target="_blank" 
-                              className="bg-[#25D366] text-white p-3 rounded-xl text-sm font-black shadow-sm"
+                              className="w-full bg-[#25D366] text-white py-3 rounded-2xl text-xs font-black flex items-center justify-center gap-2 shadow-sm mt-1"
                             >
-                              💬 Chamar
+                              💬 Enviar Promoção no WhatsApp
                             </a>
                           </div>
-                        ))}
-                        {uniqueClients.length === 0 && <div className="text-center text-zinc-400 py-6">Nenhum cliente cadastrado ainda.</div>}
-                      </div>
+                        );
+                      })}
+                      {displayedClients.length === 0 && <div className="text-center text-zinc-400 py-10 text-xs">Nenhum cliente encontrado neste filtro.</div>}
                     </div>
                   </div>
                 )}
