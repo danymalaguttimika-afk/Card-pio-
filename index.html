@@ -60,17 +60,13 @@
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const oscillator = audioCtx.createOscillator();
         const gainNode = audioCtx.createGain();
-        
         oscillator.type = 'sine';
         oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); 
         oscillator.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.4);
-        
         gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
-        
         oscillator.connect(gainNode);
         gainNode.connect(audioCtx.destination);
-        
         oscillator.start();
         oscillator.stop(audioCtx.currentTime + 0.4);
       } catch (e) {
@@ -85,10 +81,12 @@
       const [cashRegisters, setCashRegisters] = useState([]);
       const [currentCash, setCurrentCash] = useState(null);
       
+      const [storeOpen, setStoreOpen] = useState(true);
       const [deliveryFee, setDeliveryFee] = useState(5.00);
       const [pixKeyConfig, setPixKeyConfig] = useState("11999999999 (Chave Pix Exemplo)");
       const [customCategories, setCustomCategories] = useState(['Burgers', 'Porções', 'Bebidas', 'Sobremesas']);
       const [addons, setAddons] = useState([]);
+      const [motoboys, setMotoboys] = useState([]);
       
       const [loading, setLoading] = useState(true);
 
@@ -107,32 +105,34 @@
       const [reference, setReference] = useState("");
       
       const [orderSuccess, setOrderSuccess] = useState(null);
+      const [trackedOrderId, setTrackedOrderId] = useState(null);
+      const [trackedOrder, setTrackedOrder] = useState(null);
 
       const [activeCategory, setActiveCategory] = useState("Todos");
       const [pdvTab, setPdvTab] = useState('orders');
       const [orderFilter, setOrderFilter] = useState('pendente');
       const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false);
+      const [dispatchingOrder, setDispatchingOrder] = useState(null);
       
       const [newProduct, setNewProduct] = useState({ name: '', price: '', category: '', description: '', imageUrl: '' });
       const [feeInput, setFeeInput] = useState("5.00");
       const [pixInput, setPixInput] = useState("11999999999");
       const [openingChangeInput, setOpeningChangeInput] = useState("0.00");
-      
       const [withdrawalAmount, setWithdrawalAmount] = useState("");
       const [withdrawalReason, setWithdrawalReason] = useState("");
-
       const [newAddonName, setNewAddonName] = useState("");
       const [newAddonPrice, setNewAddonPrice] = useState("");
+      const [newMotoboy, setNewMotoboy] = useState("");
 
       const [leadFilter, setLeadFilter] = useState('all');
       const [promoTemplate, setPromoTemplate] = useState("Olá [Nome]! Tudo bem? Passando para avisar que hoje o cardápio da Malaguti Brothers está recheado de delícias. Que tal pedir seu lanche favorito agora? 🍔🔥");
-
       const [analysisStartDate, setAnalysisStartDate] = useState("");
       const [analysisEndDate, setAnalysisEndDate] = useState("");
 
       const viewRef = useRef(view);
       useEffect(() => { viewRef.current = view; }, [view]);
 
+      // INICIALIZAÇÃO E LEITURA DE DADOS
       useEffect(() => {
         try {
           const savedDataStr = localStorage.getItem('malaguti_customer_data');
@@ -145,6 +145,8 @@
             if (savedData.neighborhood) setNeighborhood(savedData.neighborhood);
             if (savedData.reference) setReference(savedData.reference);
           }
+          const savedOrderId = localStorage.getItem('malaguti_order_id');
+          if (savedOrderId) setTrackedOrderId(savedOrderId);
         } catch(e) { console.error("Erro ao ler cache:", e); }
 
         const { db, collection, onSnapshot, doc } = window.firebaseAPI;
@@ -159,12 +161,9 @@
         const unsubOrders = onSnapshot(collection(db, 'orders'), (snap) => {
           if (!isInitialOrdersLoad && viewRef.current === 'pdv') {
             const hasNewOrder = snap.docChanges().some(change => change.type === 'added');
-            if (hasNewOrder) {
-              playBeep();
-            }
+            if (hasNewOrder) playBeep();
           }
           isInitialOrdersLoad = false;
-
           const ords = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           ords.sort((a, b) => b.createdAt - a.createdAt);
           setOrders(ords);
@@ -182,12 +181,13 @@
         const unsubConfig = onSnapshot(doc(db, 'settings', 'config'), (docSnap) => {
           if (docSnap.exists()) {
             const data = docSnap.data();
-            const fee = data.fee || 5.00;
-            const pix = data.pixKey || "11999999999";
-            setDeliveryFee(fee);
-            setFeeInput(fee.toString());
-            setPixKeyConfig(pix);
-            setPixInput(pix);
+            setDeliveryFee(data.fee || 0);
+            setFeeInput((data.fee || 0).toString());
+            setPixKeyConfig(data.pixKey || "11999999999");
+            setPixInput(data.pixKey || "11999999999");
+            setStoreOpen(data.storeOpen !== false);
+          } else {
+            setDoc(doc(db, 'settings', 'config'), { fee: 5.00, pixKey: "11999999999", storeOpen: true });
           }
         }, (err) => console.error(err));
 
@@ -201,13 +201,42 @@
           setAddons(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         }, (err) => console.error(err));
 
+        const unsubMotoboys = onSnapshot(doc(db, 'settings', 'motoboys'), (docSnap) => {
+          if (docSnap.exists()) setMotoboys(docSnap.data().list || []);
+        });
+
         const timer = setTimeout(() => { setLoading(false); }, 1500);
 
         return () => {
-          unsubProducts(); unsubOrders(); unsubCash(); unsubConfig(); unsubCats(); unsubAddons();
+          unsubProducts(); unsubOrders(); unsubCash(); unsubConfig(); unsubCats(); unsubAddons(); unsubMotoboys();
           clearTimeout(timer);
         };
       }, []);
+
+      // TRACKER DO CLIENTE
+      useEffect(() => {
+        if (!trackedOrderId) {
+          setTrackedOrder(null);
+          return;
+        }
+        const { db, doc, onSnapshot } = window.firebaseAPI;
+        if(!db) return;
+        const unsub = onSnapshot(doc(db, 'orders', trackedOrderId), (docSnap) => {
+          if (docSnap.exists()) {
+            setTrackedOrder({ id: docSnap.id, ...docSnap.data() });
+          } else {
+            localStorage.removeItem('malaguti_order_id');
+            setTrackedOrderId(null);
+          }
+        });
+        return () => unsub();
+      }, [trackedOrderId]);
+
+
+      const handleToggleStore = async () => {
+        const { db, doc, updateDoc } = window.firebaseAPI;
+        await updateDoc(doc(db, 'settings', 'config'), { storeOpen: !storeOpen });
+      };
 
       const handlePdvAccess = () => {
         const senha = prompt("Digite a senha de acesso ao sistema:");
@@ -219,23 +248,36 @@
         }
       };
 
+      const handleAddMotoboy = async (e) => {
+        e.preventDefault();
+        const name = newMotoboy.trim();
+        if (!name) return;
+        const updatedList = [...motoboys, name];
+        try {
+          const { db, doc, setDoc } = window.firebaseAPI;
+          await setDoc(doc(db, 'settings', 'motoboys'), { list: updatedList }, { merge: true });
+          setNewMotoboy("");
+        } catch (error) { alert("Erro ao adicionar motoboy."); }
+      };
+
+      const handleDeleteMotoboy = async (mbToDelete) => {
+        if (!window.confirm(`Remover ${mbToDelete} da equipe?`)) return;
+        const updatedList = motoboys.filter(m => m !== mbToDelete);
+        try {
+          const { db, doc, setDoc } = window.firebaseAPI;
+          await setDoc(doc(db, 'settings', 'motoboys'), { list: updatedList }, { merge: true });
+        } catch (error) { alert("Erro ao remover motoboy."); }
+      };
+
       const handleOpenCash = async (e) => {
         e.preventDefault();
         const change = parseFloat(openingChangeInput);
         if (isNaN(change) || change < 0) return alert("Digite um valor de troco válido.");
-
         try {
           const { db, collection, addDoc } = window.firebaseAPI;
           await addDoc(collection(db, 'cash_registers'), {
-            status: 'aberto',
-            openingChange: change,
-            openedAt: Date.now(),
-            closedAt: null,
-            totalSales: 0,
-            pixSales: 0,
-            cardSales: 0,
-            cashSales: 0,
-            withdrawals: []
+            status: 'aberto', openingChange: change, openedAt: Date.now(),
+            closedAt: null, totalSales: 0, pixSales: 0, cardSales: 0, cashSales: 0, withdrawals: []
           });
           alert("Caixa aberto com sucesso!");
         } catch (error) { alert("Erro ao abrir caixa."); }
@@ -246,25 +288,16 @@
         if (!currentCash) return;
         const amount = parseFloat(withdrawalAmount);
         const reason = withdrawalReason.trim();
-
         if (isNaN(amount) || amount <= 0) return alert("Digite um valor válido para a retirada.");
         if (!reason) return alert("Digite o motivo da retirada (Ex: Gasolina, Mercado).");
-
         const existingWithdrawals = currentCash.withdrawals || [];
         const newWithdrawal = { id: Date.now(), amount, reason, createdAt: Date.now() };
         const updatedWithdrawals = [...existingWithdrawals, newWithdrawal];
-
         try {
           const { db, doc, updateDoc } = window.firebaseAPI;
-          await updateDoc(doc(db, 'cash_registers', currentCash.id), {
-            withdrawals: updatedWithdrawals
-          });
-          setWithdrawalAmount("");
-          setWithdrawalReason("");
-        } catch (error) {
-          console.error(error);
-          alert("Erro ao registrar retirada.");
-        }
+          await updateDoc(doc(db, 'cash_registers', currentCash.id), { withdrawals: updatedWithdrawals });
+          setWithdrawalAmount(""); setWithdrawalReason("");
+        } catch (error) { alert("Erro ao registrar retirada."); }
       };
 
       const handleDeleteWithdrawal = async (withdrawalId) => {
@@ -272,20 +305,15 @@
         const updatedWithdrawals = (currentCash.withdrawals || []).filter(w => w.id !== withdrawalId);
         try {
           const { db, doc, updateDoc } = window.firebaseAPI;
-          await updateDoc(doc(db, 'cash_registers', currentCash.id), {
-            withdrawals: updatedWithdrawals
-          });
-        } catch (error) {
-          console.error(error);
-        }
+          await updateDoc(doc(db, 'cash_registers', currentCash.id), { withdrawals: updatedWithdrawals });
+        } catch (error) {}
       };
 
       const handleCloseCash = async () => {
         if (!currentCash) return;
         if (!window.confirm("Deseja realmente fechar o caixa do dia?")) return;
 
-        // Ao fechar o caixa, filtramos os cancelados para não sujar a receita
-        const sessionOrders = orders.filter(o => o.createdAt >= currentCash.openedAt && o.status !== 'cancelado');
+        const sessionOrders = orders.filter(o => o.createdAt >= currentCash.openedAt);
         const totalSales = sessionOrders.reduce((acc, o) => acc + (o.total || 0), 0);
         const pixSales = sessionOrders.filter(o => o.paymentMethod === 'Pix').reduce((acc, o) => acc + (o.total || 0), 0);
         const cardSales = sessionOrders.filter(o => o.paymentMethod === 'Cartão').reduce((acc, o) => acc + (o.total || 0), 0);
@@ -295,13 +323,7 @@
         try {
           const { db, doc, updateDoc } = window.firebaseAPI;
           await updateDoc(doc(db, 'cash_registers', currentCash.id), {
-            status: 'fechado',
-            closedAt: Date.now(),
-            totalSales,
-            pixSales,
-            cardSales,
-            cashSales,
-            totalWithdrawals
+            status: 'fechado', closedAt: Date.now(), totalSales, pixSales, cardSales, cashSales, totalWithdrawals
           });
           alert("Caixa fechado com sucesso!");
         } catch (error) { alert("Erro ao fechar caixa."); }
@@ -323,12 +345,10 @@
         const name = newAddonName.trim();
         const price = parseFloat(newAddonPrice);
         if (!name || isNaN(price)) return alert("Preencha o nome e um preço válido para o adicional.");
-        
         try {
           const { db, collection, addDoc } = window.firebaseAPI;
           await addDoc(collection(db, 'addons'), { name, price });
-          setNewAddonName("");
-          setNewAddonPrice("");
+          setNewAddonName(""); setNewAddonPrice("");
         } catch (error) { alert("Erro ao adicionar adicional."); }
       };
 
@@ -345,7 +365,6 @@
             setNewProduct({...newProduct, category: name});
             return;
         }
-        
         const updatedList = [...customCategories, name];
         try {
           const { db, doc, setDoc } = window.firebaseAPI;
@@ -372,34 +391,21 @@
       const handleImageUpload = (e) => {
         const file = e.target.files[0];
         if (!file) return;
-
         const reader = new FileReader();
         reader.onload = (uploadEvent) => {
           const img = new Image();
           img.onload = () => {
             const canvas = document.createElement('canvas');
-            const MAX_WIDTH = 400;
-            const MAX_HEIGHT = 400;
-            let width = img.width;
-            let height = img.height;
-
+            const MAX_WIDTH = 400; const MAX_HEIGHT = 400;
+            let width = img.width; let height = img.height;
             if (width > height) {
-              if (width > MAX_WIDTH) {
-                height *= MAX_WIDTH / width;
-                width = MAX_WIDTH;
-              }
+              if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
             } else {
-              if (height > MAX_HEIGHT) {
-                width *= MAX_HEIGHT / height;
-                height = MAX_HEIGHT;
-              }
+              if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
             }
-
-            canvas.width = width;
-            canvas.height = height;
+            canvas.width = width; canvas.height = height;
             const ctx = canvas.getContext('2d');
             ctx.drawImage(img, 0, 0, width, height);
-            
             const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
             setNewProduct(prev => ({ ...prev, imageUrl: dataUrl }));
           };
@@ -412,18 +418,11 @@
         const chosenAddons = addons.filter(a => selectedAddons[a.id]);
         const addonsTotal = chosenAddons.reduce((acc, a) => acc + a.price, 0);
         const finalPrice = parseFloat(product.price) + addonsTotal;
-        
         const cartItem = {
           id: product.id + "_" + chosenAddons.map(a => a.id).join("_") + "_" + (productNote ? productNote.trim() : ""),
-          productId: product.id,
-          name: product.name,
-          basePrice: parseFloat(product.price),
-          price: finalPrice,
-          addons: chosenAddons,
-          note: productNote.trim(),
-          quantity: 1
+          productId: product.id, name: product.name, basePrice: parseFloat(product.price),
+          price: finalPrice, addons: chosenAddons, note: productNote.trim(), quantity: 1
         };
-
         setCart(prev => {
           const existing = prev.find(item => item.id === cartItem.id);
           if (existing) {
@@ -431,18 +430,13 @@
           }
           return [...prev, cartItem];
         });
-
-        setSelectedProduct(null);
-        setSelectedAddons({});
-        setProductNote("");
+        setSelectedProduct(null); setSelectedAddons({}); setProductNote("");
       };
 
       const updateQuantity = (cartItemId, delta) => {
         setCart(prev => {
           return prev.map(item => {
-            if (item.id === cartItemId) {
-              return { ...item, quantity: item.quantity + delta };
-            }
+            if (item.id === cartItemId) { return { ...item, quantity: item.quantity + delta }; }
             return item;
           }).filter(item => item.quantity > 0);
         });
@@ -452,6 +446,7 @@
       const cartTotal = itemsTotal + deliveryFee;
 
       const handleCheckout = async () => {
+        if (!storeOpen) return alert("Desculpe, a loja está fechada no momento.");
         if (cart.length === 0) return;
         if (!customerName.trim()) return alert("Por favor, insira seu nome.");
         if (!customerPhone.trim()) return alert("Por favor, insira seu WhatsApp.");
@@ -465,7 +460,7 @@
 
         try {
           const { db, collection, addDoc } = window.firebaseAPI;
-          await addDoc(collection(db, 'orders'), {
+          const docRef = await addDoc(collection(db, 'orders'), {
             customerName, customerPhone, customerAddress: addressText, 
             items: cart, subtotal: itemsTotal, deliveryFee: deliveryFee, total: cartTotal, 
             paymentMethod: paymentMethod, phone: WHATSAPP_NUMBER, status: 'pendente', source: 'whatsapp', createdAt: Date.now()
@@ -475,16 +470,12 @@
             localStorage.setItem('malaguti_customer_data', JSON.stringify({
               customerName, customerPhone, street, number, neighborhood, reference
             }));
+            localStorage.setItem('malaguti_order_id', docRef.id);
+            setTrackedOrderId(docRef.id);
           } catch(e) { console.error("Erro ao salvar cache", e); }
 
-          setOrderSuccess({
-            customerName,
-            paymentMethod,
-            total: cartTotal
-          });
-
-          setCart([]); 
-          setIsCartOpen(false); 
+          setOrderSuccess({ customerName, paymentMethod, total: cartTotal });
+          setCart([]); setIsCartOpen(false); 
         } catch (error) { alert("Erro ao gerar pedido."); }
       };
 
@@ -492,7 +483,6 @@
         e.preventDefault();
         if (!newProduct.name || !newProduct.price) return;
         const categoryToSave = newProduct.category || (customCategories.length > 0 ? customCategories[0] : 'Geral');
-
         try {
           const { db, collection, addDoc } = window.firebaseAPI;
           await addDoc(collection(db, 'products'), { ...newProduct, price: parseFloat(newProduct.price), category: categoryToSave, paused: false, createdAt: Date.now() });
@@ -501,24 +491,19 @@
         } catch (error) { console.error(error); }
       };
 
-      // Exclusão permanente só para limpeza se necessário
       const handleDeleteOrder = async (id) => {
         if (!window.confirm("Atenção! Deseja apagar permanentemente este pedido?")) return;
         const { db, doc, deleteDoc } = window.firebaseAPI;
         await deleteDoc(doc(db, 'orders', id));
       };
 
-      // Novo Fluxo de Cancelamento
       const handleCancelOrder = async (orderId) => {
         const reason = prompt("Qual o motivo do cancelamento? (Ex: Cliente desistiu, Trote, Faltou item)");
-        if (!reason) return; // Se cancelar o prompt, não faz nada
-        
+        if (!reason) return; 
         try {
           const { db, doc, updateDoc } = window.firebaseAPI;
           await updateDoc(doc(db, 'orders', orderId), { status: 'cancelado', cancelReason: reason });
-        } catch (error) {
-          alert("Erro ao cancelar o pedido.");
-        }
+        } catch (error) { alert("Erro ao cancelar o pedido."); }
       };
 
       const handleUpdateOrderStatus = async (orderId, newStatus) => {
@@ -526,22 +511,36 @@
         await updateDoc(doc(db, 'orders', orderId), { status: newStatus });
       };
 
-      const handleFinishAndNotify = async (order) => {
-        await handleUpdateOrderStatus(order.id, 'finalizado');
-        if (order.customerPhone) {
-          let foneLimpo = order.customerPhone.replace(/\D/g, ''); 
-          if (!foneLimpo.startsWith('55') && foneLimpo.length <= 11) foneLimpo = '55' + foneLimpo; 
-          
-          const mensagem = `Olá ${order.customerName}, o seu pedido ficou pronto e nos próximos instantes sairá para entrega. Obrigado pelo seu pedido e que DEUS o abençoe. 🙏🍔`;
-          const zapUrl = `https://wa.me/${foneLimpo}?text=${encodeURIComponent(mensagem)}`;
-          window.open(zapUrl, '_blank');
+      // DESPACHAR MOTOBOY E FINALIZAR
+      const handleDispatchClick = (order) => {
+        if (motoboys.length > 0) {
+          setDispatchingOrder(order);
+        } else {
+          handleFinishAndNotify(order, null);
         }
+      };
+
+      const handleFinishAndNotify = async (order, motoboyName = null) => {
+        try {
+          const { db, doc, updateDoc } = window.firebaseAPI;
+          const updateData = { status: 'finalizado' };
+          if (motoboyName) updateData.motoboy = motoboyName;
+          
+          await updateDoc(doc(db, 'orders', order.id), updateData);
+          
+          if (order.customerPhone) {
+            let foneLimpo = order.customerPhone.replace(/\D/g, ''); 
+            if (!foneLimpo.startsWith('55') && foneLimpo.length <= 11) foneLimpo = '55' + foneLimpo; 
+            const mensagem = `Olá ${order.customerName}, o seu pedido saiu para entrega. Obrigado pela preferência e que DEUS o abençoe. 🙏🍔`;
+            const zapUrl = `https://wa.me/${foneLimpo}?text=${encodeURIComponent(mensagem)}`;
+            window.open(zapUrl, '_blank');
+          }
+        } catch (error) { alert("Erro ao despachar."); }
       };
 
       const printOrder = (order) => {
         const subtotal = order.subtotal !== undefined ? order.subtotal : (order.total - (order.deliveryFee || 0));
         const fee = order.deliveryFee !== undefined ? order.deliveryFee : 0;
-
         let html = `
           <!DOCTYPE html>
           <html><head><title>Impressão</title>
@@ -599,28 +598,18 @@
             </div>
           </body></html>
         `;
-
         let iframe = document.getElementById('printFrame');
         if (!iframe) {
           iframe = document.createElement('iframe');
           iframe.id = 'printFrame';
-          iframe.style.position = 'fixed';
-          iframe.style.right = '0';
-          iframe.style.bottom = '0';
-          iframe.style.width = '0';
-          iframe.style.height = '0';
-          iframe.style.border = '0';
+          iframe.style.position = 'fixed'; iframe.style.right = '0'; iframe.style.bottom = '0';
+          iframe.style.width = '0'; iframe.style.height = '0'; iframe.style.border = '0';
           document.body.appendChild(iframe);
         }
-        
         iframe.contentWindow.document.open();
         iframe.contentWindow.document.write(html);
         iframe.contentWindow.document.close();
-
-        setTimeout(() => {
-          iframe.contentWindow.focus();
-          iframe.contentWindow.print();
-        }, 500);
+        setTimeout(() => { iframe.contentWindow.focus(); iframe.contentWindow.print(); }, 500);
       };
 
       if (loading) return <div className="min-h-screen flex items-center justify-center font-bold text-amber-500 animate-pulse">Conectando ao banco de dados...</div>;
@@ -629,11 +618,9 @@
       const filteredProducts = (activeCategory === 'Todos' ? products : products.filter(p => p.category === activeCategory))
         .filter(p => !p.paused);
 
-      // --- FILTRO DIÁRIO DE PEDIDOS NO PDV ---
       const startOfDayMs = new Date().setHours(0,0,0,0);
       const pdvDisplayOrders = orders.filter(o => o.createdAt >= startOfDayMs);
 
-      // --- CAIXA: IGNORA OS CANCELADOS NA SOMA ---
       const activeSessionOrdersValid = currentCash ? orders.filter(o => o.createdAt >= currentCash.openedAt && o.status !== 'cancelado') : [];
       const sessionTotal = activeSessionOrdersValid.reduce((acc, o) => acc + (o.total || 0), 0);
       const sessionPix = activeSessionOrdersValid.filter(o => o.paymentMethod === 'Pix').reduce((acc, o) => acc + (o.total || 0), 0);
@@ -643,19 +630,24 @@
       const totalWithdrawals = (currentCash?.withdrawals || []).reduce((acc, w) => acc + w.amount, 0);
       const expectedCashInDrawer = (currentCash?.openingChange || 0) + sessionCash - totalWithdrawals;
 
+      // Cálculo Acerto de Motoboys
+      const motoboyStats = {};
+      activeSessionOrdersValid.forEach(o => {
+        if (o.motoboy) {
+          if (!motoboyStats[o.motoboy]) motoboyStats[o.motoboy] = { count: 0, fees: 0 };
+          motoboyStats[o.motoboy].count += 1;
+          motoboyStats[o.motoboy].fees += (o.deliveryFee || 0);
+        }
+      });
+
       const closedCashRegisters = cashRegisters.filter(c => c.status === 'fechado');
       const monthlyRevenue = closedCashRegisters.reduce((acc, c) => acc + (c.totalSales || 0), 0);
 
       const productSalesCount = {};
       activeSessionOrdersValid.forEach(o => {
-        if (o.items) {
-          o.items.forEach(item => {
-            productSalesCount[item.name] = (productSalesCount[item.name] || 0) + item.quantity;
-          });
-        }
+        if (o.items) { o.items.forEach(item => { productSalesCount[item.name] = (productSalesCount[item.name] || 0) + item.quantity; }); }
       });
 
-      // --- ANÁLISE: CÁLCULOS E CANCELADOS ---
       const filteredOrdersForAnalysis = orders.filter(o => {
         if (!analysisStartDate && !analysisEndDate) return true;
         const orderDateStr = new Date(o.createdAt).toISOString().split('T')[0];
@@ -664,10 +656,8 @@
         return true;
       });
 
-      // Separamos os cancelados para a métrica de prejuízo
       const validOrdersForAnalysis = filteredOrdersForAnalysis.filter(o => o.status !== 'cancelado');
       const canceledOrdersForAnalysis = filteredOrdersForAnalysis.filter(o => o.status === 'cancelado');
-      
       const periodCanceledRevenue = canceledOrdersForAnalysis.reduce((acc, o) => acc + (o.total || 0), 0);
       const periodCanceledCount = canceledOrdersForAnalysis.length;
 
@@ -681,25 +671,19 @@
         const orderDate = new Date(o.createdAt);
         const monthKey = orderDate.toLocaleString('pt-BR', { month: 'long', year: 'numeric' });
         
-        if (!periodSeasonalityStats[monthKey]) {
-          periodSeasonalityStats[monthKey] = { revenue: 0, count: 0 };
-        }
+        if (!periodSeasonalityStats[monthKey]) periodSeasonalityStats[monthKey] = { revenue: 0, count: 0 };
         periodSeasonalityStats[monthKey].revenue += (o.total || 0);
         periodSeasonalityStats[monthKey].count += 1;
 
         if (o.items) {
           o.items.forEach(item => {
-            if (!globalProductStats[item.name]) {
-              globalProductStats[item.name] = { qty: 0, revenue: 0 };
-            }
+            if (!globalProductStats[item.name]) globalProductStats[item.name] = { qty: 0, revenue: 0 };
             globalProductStats[item.name].qty += item.quantity;
             globalProductStats[item.name].revenue += (item.price * item.quantity);
 
             const matchedProd = products.find(p => p.name === item.name);
             const cat = matchedProd ? matchedProd.category : 'Outros';
-            if (!categorySalesStats[cat]) {
-              categorySalesStats[cat] = { qty: 0, revenue: 0 };
-            }
+            if (!categorySalesStats[cat]) categorySalesStats[cat] = { qty: 0, revenue: 0 };
             categorySalesStats[cat].qty += item.quantity;
             categorySalesStats[cat].revenue += (item.price * item.quantity);
           });
@@ -710,19 +694,12 @@
       const sortedCategories = Object.entries(categorySalesStats).sort((a, b) => b[1].revenue - a[1].revenue);
       const sortedSeasonality = Object.entries(periodSeasonalityStats).sort((a, b) => new Date(b[0]) - new Date(a[0]));
 
-      // Leads
       const uniqueClientsMap = {};
       orders.forEach(o => {
         if (o.customerPhone) {
           const phoneClean = o.customerPhone.trim();
           if (!uniqueClientsMap[phoneClean]) {
-            uniqueClientsMap[phoneClean] = {
-              name: o.customerName,
-              phone: phoneClean,
-              address: o.customerAddress,
-              ordersCount: 0,
-              lastOrderAt: 0
-            };
+            uniqueClientsMap[phoneClean] = { name: o.customerName, phone: phoneClean, address: o.customerAddress, ordersCount: 0, lastOrderAt: 0 };
           }
           uniqueClientsMap[phoneClean].ordersCount += 1;
           if (o.createdAt > uniqueClientsMap[phoneClean].lastOrderAt) {
@@ -739,7 +716,6 @@
         return { ...c, daysAgo };
       });
       uniqueClients.sort((a, b) => b.lastOrderAt - a.lastOrderAt);
-
       const displayedClients = uniqueClients.filter(c => {
         if (leadFilter === 'loyal') return c.ordersCount >= 2;
         if (leadFilter === 'churned') return c.daysAgo >= 15;
@@ -749,11 +725,36 @@
       return (
         <div className="min-h-screen relative pb-20 w-full overflow-x-hidden font-sans">
           
+          {/* Menu Flutuante Superior (Botões) */}
           <div className="fixed top-2 right-2 z-50 bg-zinc-800/80 p-1 rounded-full flex gap-1 border border-zinc-700 shadow-xl backdrop-blur-md">
             <button onClick={() => setView('menu')} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-colors ${view === 'menu' ? 'bg-amber-500 text-black' : 'text-zinc-400'}`}>Cardápio</button>
             <button onClick={handlePdvAccess} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-colors ${view === 'pdv' ? 'bg-amber-500 text-black' : 'text-zinc-400'}`}>PDV 🔒</button>
           </div>
 
+          {/* Banner de Loja Fechada no Cardápio */}
+          {!storeOpen && view === 'menu' && (
+             <div className="bg-red-600 text-white text-center py-2.5 text-xs font-black tracking-wide uppercase shadow-md sticky top-0 z-[40] flex justify-center items-center gap-2">
+               <span>🚫</span> Loja Fechada no momento
+             </div>
+          )}
+
+          {/* RASTREADOR DE PEDIDO AO VIVO (CLIENTE) */}
+          {trackedOrder && view === 'menu' && !orderSuccess && (
+            <div className="fixed bottom-24 left-1/2 -translate-x-1/2 w-[90%] max-w-sm bg-zinc-900 border border-amber-500/50 shadow-[0_0_20px_rgba(245,158,11,0.2)] rounded-2xl p-4 z-40 flex items-center justify-between">
+              <div>
+                <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">Acompanhe seu Pedido</p>
+                <p className="text-sm font-black text-amber-500 mt-1">
+                  {trackedOrder.status === 'pendente' && '📝 Aguardando Confirmação'}
+                  {trackedOrder.status === 'preparando' && '🍳 Sendo Preparado na Cozinha'}
+                  {trackedOrder.status === 'finalizado' && '🛵 Saiu para Entrega'}
+                  {trackedOrder.status === 'cancelado' && '🚫 Pedido Cancelado'}
+                </p>
+              </div>
+              <button onClick={() => { setTrackedOrderId(null); setTrackedOrder(null); localStorage.removeItem('malaguti_order_id'); }} className="bg-zinc-800 p-2 rounded-xl text-xs font-bold text-zinc-300">Ocultar</button>
+            </div>
+          )}
+
+          {/* Modal de Sucesso */}
           {orderSuccess && (
              <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
                  <div className="bg-zinc-900 rounded-[2.5rem] p-8 max-w-sm w-full text-center border border-zinc-800 shadow-2xl relative overflow-hidden">
@@ -762,29 +763,25 @@
                      </div>
                      <h2 className="text-2xl font-black text-white mb-2 tracking-tight">Pedido Recebido! 🎉</h2>
                      <p className="text-zinc-400 text-sm mb-6 leading-relaxed">
-                         Olá <strong>{orderSuccess.customerName}</strong>, seu pedido já está no nosso sistema e será preparado o mais breve possível. Obrigado pela oportunidade de servi-lo!
+                         Olá <strong>{orderSuccess.customerName}</strong>, seu pedido já está no nosso sistema. Acompanhe o status ao vivo na tela do cardápio!
                      </p>
 
-                     {orderSuccess.paymentMethod === 'Pix' ? (
-                         <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 mb-6">
-                             <p className="text-amber-500 text-xs font-black uppercase mb-2">⚠️ Falta só um detalhe!</p>
-                             <p className="text-zinc-300 text-xs mb-4">Como você escolheu Pix, envie o comprovante no nosso WhatsApp para a cozinha iniciar o preparo.</p>
+                     {orderSuccess.paymentMethod === 'Pix' && (
+                         <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 mb-6 text-left">
+                             <p className="text-amber-500 text-xs font-black uppercase mb-2 text-center">⚠️ Falta só um detalhe!</p>
+                             <p className="text-zinc-300 text-xs mb-4 text-center">Como você escolheu Pix, envie o comprovante no nosso WhatsApp para a cozinha iniciar o preparo.</p>
                              <a 
-                                href={`https://wa.me/5511999999999?text=${encodeURIComponent(`Olá, sou ${orderSuccess.customerName} e acabei de fazer um pedido no site. Segue meu comprovante Pix no valor de R$ ${orderSuccess.total.toFixed(2)}!`)}`} 
+                                href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(`Olá, sou ${orderSuccess.customerName} e acabei de fazer um pedido no site. Segue meu comprovante Pix no valor de R$ ${orderSuccess.total.toFixed(2)}!`)}`} 
                                 target="_blank" 
                                 className="flex items-center justify-center gap-2 w-full bg-[#25D366] text-white py-3.5 rounded-xl font-black text-sm shadow-md"
                              >
                                  📲 Enviar Comprovante
                              </a>
                          </div>
-                     ) : (
-                         <div className="bg-zinc-950 rounded-2xl p-4 mb-6 border border-zinc-800 text-xs text-zinc-400">
-                             Fique de olho no seu celular. Qualquer dúvida, a nossa equipe entrará em contato.
-                         </div>
                      )}
 
-                     <button onClick={() => setOrderSuccess(null)} className="w-full bg-zinc-800 hover:bg-zinc-700 text-white py-3.5 rounded-xl font-bold text-sm transition-colors">
-                         Voltar ao Cardápio
+                     <button onClick={() => setOrderSuccess(null)} className="w-full bg-amber-500 text-black py-3.5 rounded-xl font-black text-sm transition-colors shadow-lg">
+                         Acompanhar Pedido
                      </button>
                  </div>
              </div>
@@ -831,7 +828,6 @@
                 )}
               </main>
 
-              {/* Modal de Detalhes, Adicionais e Retiradas/Observações */}
               {selectedProduct && (
                 <div className="fixed inset-0 z-50 flex items-end justify-center">
                   <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setSelectedProduct(null)}></div>
@@ -906,7 +902,6 @@
                 </div>
               )}
 
-              {/* Modal da Sacola */}
               {isCartOpen && (
                 <div className="fixed inset-0 z-50 flex items-end justify-center">
                   <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setIsCartOpen(false)}></div>
@@ -993,29 +988,14 @@
                             >
                               📋 Copiar Chave Pix
                             </button>
-                            <p className="text-[11px] text-amber-200/90 text-center leading-tight">
-                              Copie a chave e faça o pagamento. Vamos te pedir o comprovante após clicar em Enviar Pedido!
-                            </p>
-                          </div>
-                        )}
-
-                        {paymentMethod === 'Cartão' && (
-                          <div className="bg-zinc-950 p-3 rounded-2xl border border-zinc-800 text-xs text-zinc-400 text-center">
-                            💳 O entregador levará a maquininha (Crédito ou Débito) até o seu endereço.
-                          </div>
-                        )}
-
-                        {paymentMethod === 'Dinheiro' && (
-                          <div className="bg-zinc-950 p-3 rounded-2xl border border-zinc-800 text-xs text-zinc-400 text-center">
-                            💵 Pagamento em dinheiro na entrega. Informe se precisa de troco no chat!
                           </div>
                         )}
                       </div>
                     </div>
 
                     <div className="p-6 bg-zinc-950 border-t border-zinc-800 rounded-t-3xl">
-                      <button onClick={handleCheckout} className="w-full bg-[#25D366] text-white py-4 rounded-2xl font-black text-lg flex items-center justify-center gap-3 shadow-lg">
-                        💬 Enviar Pedido (R$ {cartTotal.toFixed(2)})
+                      <button onClick={handleCheckout} disabled={!storeOpen} className={`w-full py-4 rounded-2xl font-black text-lg flex items-center justify-center gap-3 shadow-lg ${!storeOpen ? 'bg-zinc-700 text-zinc-500 cursor-not-allowed' : 'bg-[#25D366] text-white'}`}>
+                        {!storeOpen ? 'Loja Fechada' : `💬 Enviar Pedido (R$ ${cartTotal.toFixed(2)})`}
                       </button>
                     </div>
                   </div>
@@ -1031,9 +1011,16 @@
                   <h1 className="text-xl font-black uppercase leading-none">PDV Mobile</h1>
                   <span className="text-[10px] text-amber-500 font-bold uppercase">Malaguti Brothers</span>
                 </div>
-                <button onClick={playBeep} className="bg-zinc-800 border border-zinc-700 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-transform">
-                  🔊 Testar Som
-                </button>
+                
+                {/* BOTÕES PDV: TESTE SOM e ABRIR/FECHAR LOJA */}
+                <div className="flex flex-col items-end gap-2">
+                  <button onClick={handleToggleStore} className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase flex items-center gap-1.5 shadow-sm transition-colors ${storeOpen ? 'bg-green-500 text-green-950' : 'bg-red-500 text-white'}`}>
+                    {storeOpen ? '🟢 Loja Aberta' : '🔴 Loja Fechada'}
+                  </button>
+                  <button onClick={playBeep} className="text-[10px] text-zinc-400 underline uppercase font-bold active:scale-95 transition-transform">
+                    Testar Som
+                  </button>
+                </div>
               </header>
 
               <main className="flex-1 overflow-y-auto pb-24">
@@ -1049,8 +1036,14 @@
                     
                     <div className="space-y-4">
                       {pdvDisplayOrders.filter(o => o.status === orderFilter).map(order => (
-                        <div key={order.id} className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-200">
-                          <div className="flex justify-between items-start">
+                        <div key={order.id} className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-200 relative">
+                          {order.motoboy && order.status === 'finalizado' && (
+                             <div className="absolute top-0 right-0 bg-blue-100 text-blue-800 text-[10px] font-black uppercase px-3 py-1 rounded-bl-xl rounded-tr-3xl border-b border-l border-blue-200">
+                               🛵 {order.motoboy}
+                             </div>
+                          )}
+
+                          <div className="flex justify-between items-start mt-2">
                             <h3 className="font-black text-lg">{order.customerName}</h3>
                             <span className="bg-amber-100 text-amber-900 text-xs font-black px-2.5 py-1 rounded-full border border-amber-200">{order.paymentMethod || 'Pix'}</span>
                           </div>
@@ -1089,7 +1082,13 @@
                             )}
 
                             {order.status === 'pendente' && <button onClick={() => handleUpdateOrderStatus(order.id, 'preparando')} className="flex-1 bg-amber-500 font-black rounded-2xl">Preparar</button>}
-                            {order.status === 'preparando' && <button onClick={() => handleFinishAndNotify(order)} className="flex-1 bg-[#25D366] text-white font-black rounded-2xl text-sm leading-tight">Finalizar & Avisar</button>}
+                            
+                            {/* NOVO BOTÃO DE DESPACHO PARA MOTOBOY */}
+                            {order.status === 'preparando' && (
+                              <button onClick={() => handleDispatchClick(order)} className="flex-1 bg-[#25D366] text-white font-black rounded-2xl text-sm leading-tight">
+                                🛵 Despachar
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -1098,6 +1097,28 @@
                       )}
                     </div>
                   </div>
+                )}
+
+                {/* MODAL DE DESPACHO DE MOTOBOY */}
+                {dispatchingOrder && (
+                   <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm">
+                     <div className="bg-white w-full max-w-md rounded-t-[2rem] p-6 relative z-10 flex flex-col">
+                        <h3 className="font-black text-xl mb-1">Despachar Pedido</h3>
+                        <p className="text-xs text-zinc-500 mb-4">Quem vai entregar o pedido de <strong className="text-black">{dispatchingOrder.customerName}</strong>?</p>
+                        
+                        <div className="space-y-2 max-h-60 overflow-y-auto">
+                          {motoboys.map(mb => (
+                             <button key={mb} onClick={() => { handleFinishAndNotify(dispatchingOrder, mb); setDispatchingOrder(null); }} className="w-full bg-blue-50 hover:bg-blue-100 py-4 rounded-xl font-bold text-sm text-blue-900 border border-blue-200 transition-colors">
+                                🛵 Entregador: {mb}
+                             </button>
+                          ))}
+                          <button onClick={() => { handleFinishAndNotify(dispatchingOrder, null); setDispatchingOrder(null); }} className="w-full bg-zinc-900 text-white py-4 rounded-xl font-black text-sm mt-2">
+                             Retirada / Sem Entregador
+                          </button>
+                          <button onClick={() => setDispatchingOrder(null)} className="w-full text-red-500 py-3 font-bold text-sm mt-2 uppercase tracking-wider">Cancelar</button>
+                        </div>
+                     </div>
+                   </div>
                 )}
 
                 {pdvTab === 'products' && (
@@ -1182,7 +1203,7 @@
                   </div>
                 )}
 
-                {/* Aba de Caixa */}
+                {/* Aba de Caixa com Gestão de Motoboys */}
                 {pdvTab === 'cash' && (
                   <div className="p-4 space-y-4">
                     {!currentCash ? (
@@ -1273,6 +1294,26 @@
                           </div>
                         </div>
 
+                        {/* NOVO: ACERTO DE MOTOBOYS */}
+                        <div className="bg-blue-50 p-4 rounded-2xl border border-blue-200 space-y-3">
+                          <h4 className="font-bold text-xs uppercase text-blue-900">🛵 Acerto de Motoboys (Taxas da Sessão):</h4>
+                          {Object.keys(motoboyStats).length === 0 ? (
+                             <p className="text-xs text-blue-400">Nenhuma entrega com motoboy registrada.</p>
+                          ) : (
+                             <div className="space-y-2">
+                               {Object.entries(motoboyStats).map(([mb, data]) => (
+                                  <div key={mb} className="flex justify-between items-center bg-white px-3 py-2 rounded-xl border border-blue-100 text-xs">
+                                    <div>
+                                      <span className="font-bold text-blue-900">{mb}</span>
+                                      <span className="text-[10px] text-zinc-500 block">{data.count} entregas efetuadas</span>
+                                    </div>
+                                    <span className="font-black text-blue-700">R$ {data.fees.toFixed(2)}</span>
+                                  </div>
+                               ))}
+                             </div>
+                          )}
+                        </div>
+
                         <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-200 space-y-3">
                           <h4 className="font-bold text-xs uppercase text-zinc-700">💸 Registrar Retirada (Sangria / Despesa):</h4>
                           <form onSubmit={handleAddWithdrawal} className="space-y-2">
@@ -1325,7 +1366,6 @@
                   </div>
                 )}
 
-                {/* Aba de Análise e Métricas de Cancelamento */}
                 {pdvTab === 'reports' && (
                   <div className="p-4 space-y-6">
                     <div className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-200 space-y-3">
@@ -1454,6 +1494,25 @@
                         </div>
                         <button type="submit" className="w-full bg-zinc-900 text-white font-black py-3 rounded-2xl shadow-md">Salvar Alterações</button>
                       </form>
+                    </div>
+
+                    {/* NOVA SEÇÃO: EQUIPE DE ENTREGADORES */}
+                    <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200">
+                      <h3 className="font-black text-xl mb-2">🛵 Equipe de Entregadores</h3>
+                      <p className="text-xs text-zinc-500 mb-4">Cadastre os motoboys para despachar pedidos e gerenciar o acerto de taxas no caixa.</p>
+                      <form onSubmit={handleAddMotoboy} className="flex gap-2 mb-4">
+                        <input type="text" value={newMotoboy} onChange={(e) => setNewMotoboy(e.target.value)} placeholder="Nome do Motoboy" className="flex-1 bg-zinc-50 border border-zinc-300 rounded-xl px-4 py-3 text-sm" required />
+                        <button type="submit" className="bg-zinc-900 text-white font-black px-4 py-3 rounded-xl text-sm">Adicionar</button>
+                      </form>
+                      <div className="space-y-2">
+                        {motoboys.map(mb => (
+                          <div key={mb} className="flex justify-between items-center bg-zinc-50 p-3 rounded-2xl border border-zinc-200 text-sm">
+                            <span className="font-bold text-zinc-800">{mb}</span>
+                            <button onClick={() => handleDeleteMotoboy(mb)} className="text-red-500 text-base px-2">🗑️</button>
+                          </div>
+                        ))}
+                        {motoboys.length === 0 && <p className="text-xs text-zinc-400 text-center py-2">Nenhum entregador cadastrado.</p>}
+                      </div>
                     </div>
 
                     <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200">
