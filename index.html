@@ -57,7 +57,10 @@
       const [view, setView] = useState('menu');
       const [products, setProducts] = useState([]);
       const [orders, setOrders] = useState([]);
+      
       const [deliveryFee, setDeliveryFee] = useState(5.00);
+      const [customCategories, setCustomCategories] = useState(['Burgers', 'Porções', 'Bebidas', 'Sobremesas']);
+      
       const [loading, setLoading] = useState(true);
 
       const [cart, setCart] = useState([]);
@@ -66,7 +69,6 @@
       
       const [customerName, setCustomerName] = useState("");
       const [customerPhone, setCustomerPhone] = useState("");
-      
       const [street, setStreet] = useState("");
       const [number, setNumber] = useState("");
       const [neighborhood, setNeighborhood] = useState("");
@@ -76,8 +78,10 @@
       const [pdvTab, setPdvTab] = useState('orders');
       const [orderFilter, setOrderFilter] = useState('pendente');
       const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false);
-      const [newProduct, setNewProduct] = useState({ name: '', price: '', category: 'Burgers', description: '', imageUrl: '' });
+      
+      const [newProduct, setNewProduct] = useState({ name: '', price: '', category: '', description: '', imageUrl: '' });
       const [feeInput, setFeeInput] = useState("5.00");
+      const [newCategoryInput, setNewCategoryInput] = useState("");
 
       useEffect(() => {
         const init = () => {
@@ -91,7 +95,7 @@
 
       useEffect(() => {
         if (!user) return;
-        const { db, collection, onSnapshot, doc } = window.firebaseAPI;
+        const { db, collection, onSnapshot, doc, setDoc } = window.firebaseAPI;
         
         const unsubProducts = onSnapshot(collection(db, 'products'), (snap) => {
           setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -106,13 +110,21 @@
 
         const unsubConfig = onSnapshot(doc(db, 'settings', 'config'), (docSnap) => {
           if (docSnap.exists()) {
-            const fee = docSnap.data().fee || 5.00;
+            const fee = docSnap.data().fee || 0;
             setDeliveryFee(fee);
             setFeeInput(fee.toString());
           }
         });
 
-        return () => { unsubProducts(); unsubOrders(); unsubConfig(); };
+        const unsubCats = onSnapshot(doc(db, 'settings', 'categories'), (docSnap) => {
+          if (docSnap.exists()) {
+            setCustomCategories(docSnap.data().list || ['Burgers', 'Porções', 'Bebidas', 'Sobremesas']);
+          } else {
+            setDoc(doc(db, 'settings', 'categories'), { list: ['Burgers', 'Porções', 'Bebidas', 'Sobremesas'] });
+          }
+        });
+
+        return () => { unsubProducts(); unsubOrders(); unsubConfig(); unsubCats(); };
       }, [user]);
 
       const handlePdvAccess = () => {
@@ -128,17 +140,37 @@
         e.preventDefault();
         const parsedFee = parseFloat(feeInput);
         if (isNaN(parsedFee) || parsedFee < 0) return alert("Digite um valor válido para a taxa.");
-        
         try {
           const { db, doc, setDoc } = window.firebaseAPI;
           await setDoc(doc(db, 'settings', 'config'), { fee: parsedFee }, { merge: true });
           alert("Taxa de entrega atualizada com sucesso!");
-        } catch (error) {
-          alert("Erro ao salvar taxa.");
-        }
+        } catch (error) { alert("Erro ao salvar taxa."); }
       };
 
-      // Função para pausar ou ativar o produto
+      const handleAddCategory = async (e) => {
+        e.preventDefault();
+        const catName = newCategoryInput.trim();
+        if (!catName) return;
+        if (customCategories.includes(catName)) return alert("Esta categoria já existe!");
+        
+        const updatedList = [...customCategories, catName];
+        try {
+          const { db, doc, setDoc } = window.firebaseAPI;
+          await setDoc(doc(db, 'settings', 'categories'), { list: updatedList }, { merge: true });
+          setNewCategoryInput("");
+        } catch (error) { alert("Erro ao adicionar categoria."); }
+      };
+
+      const handleDeleteCategory = async (catToDelete) => {
+        if (!window.confirm(`Atenção: Tem certeza que deseja excluir a categoria "${catToDelete}"?\n\nOs produtos cadastrados nela não serão apagados, mas ficarão sem categoria até você editá-los.`)) return;
+        const updatedList = customCategories.filter(c => c !== catToDelete);
+        try {
+          const { db, doc, setDoc } = window.firebaseAPI;
+          await setDoc(doc(db, 'settings', 'categories'), { list: updatedList }, { merge: true });
+          if (activeCategory === catToDelete) setActiveCategory('Todos');
+        } catch (error) { alert("Erro ao excluir categoria."); }
+      };
+
       const handleTogglePause = async (product) => {
         const { db, doc, updateDoc } = window.firebaseAPI;
         const newPausedState = !product.paused;
@@ -206,10 +238,13 @@
       const handleAddProduct = async (e) => {
         e.preventDefault();
         if (!newProduct.name || !newProduct.price) return;
+        
+        const categoryToSave = newProduct.category || (customCategories.length > 0 ? customCategories[0] : 'Geral');
+
         try {
           const { db, collection, addDoc } = window.firebaseAPI;
-          await addDoc(collection(db, 'products'), { ...newProduct, price: parseFloat(newProduct.price), paused: false, createdAt: Date.now() });
-          setNewProduct({ name: '', price: '', category: 'Burgers', description: '', imageUrl: '' });
+          await addDoc(collection(db, 'products'), { ...newProduct, price: parseFloat(newProduct.price), category: categoryToSave, paused: false, createdAt: Date.now() });
+          setNewProduct({ name: '', price: '', category: '', description: '', imageUrl: '' });
           setIsAddProductModalOpen(false);
         } catch (error) { console.error(error); }
       };
@@ -246,7 +281,6 @@
         }
       };
 
-      // Notinha otimizada com Endereço Grande no Final para o Entregador
       const printOrder = (order) => {
         const subtotal = order.subtotal !== undefined ? order.subtotal : (order.total - (order.deliveryFee || 0));
         const fee = order.deliveryFee !== undefined ? order.deliveryFee : 0;
@@ -329,9 +363,8 @@
 
       if (loading) return <div className="min-h-screen flex items-center justify-center font-bold text-amber-500 animate-pulse">Conectando ao banco de dados...</div>;
 
-      const categories = ['Todos', 'Burgers', 'Porções', 'Bebidas', 'Sobremesas'];
+      const displayCategories = ['Todos', ...customCategories];
       
-      // Filtra produtos por categoria e esconde os que estão pausados para o cliente
       const filteredProducts = (activeCategory === 'Todos' ? products : products.filter(p => p.category === activeCategory))
         .filter(p => !p.paused);
 
@@ -353,7 +386,7 @@
 
               <div className="sticky top-0 z-20 bg-zinc-950/90 backdrop-blur-md pt-4 pb-2 border-b border-zinc-800">
                 <div className="flex overflow-x-auto gap-3 px-4 pb-2 snap-x">
-                  {categories.map(cat => (
+                  {displayCategories.map(cat => (
                     <button key={cat} onClick={() => setActiveCategory(cat)} className={`snap-center whitespace-nowrap px-5 py-2.5 rounded-full text-sm font-bold ${activeCategory === cat ? 'bg-amber-500 text-zinc-950' : 'bg-zinc-900 text-zinc-400 border border-zinc-800'}`}>
                       {cat}
                     </button>
@@ -530,7 +563,6 @@
                   </div>
                 )}
 
-                {/* Aba de Produtos com Botão de Pausar */}
                 {pdvTab === 'products' && (
                   <div className="p-4">
                     {products.map(product => (
@@ -543,7 +575,6 @@
                           <p className="text-sm font-black mt-1">R$ {parseFloat(product.price).toFixed(2)}</p>
                         </div>
                         
-                        {/* Botão de Pausar / Ativar */}
                         <button onClick={() => handleTogglePause(product)} className={`px-3 py-2 rounded-xl text-xs font-bold transition-colors ${product.paused ? 'bg-amber-500 text-black shadow-sm' : 'bg-zinc-200 text-zinc-700'}`}>
                           {product.paused ? '▶️ Ativar' : '⏸️ Pausar'}
                         </button>
@@ -559,26 +590,38 @@
                 )}
 
                 {pdvTab === 'config' && (
-                  <div className="p-6">
+                  <div className="p-6 space-y-6">
+                    {/* Ajuste de Taxa de Entrega */}
                     <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200">
                       <h3 className="font-black text-xl mb-2">⚙️ Taxa de Entrega</h3>
                       <p className="text-xs text-zinc-500 mb-6">Defina o valor da taxa que será somada automaticamente em todos os pedidos dos clientes.</p>
-                      
                       <form onSubmit={handleSaveFee} className="space-y-4">
                         <div>
                           <label className="block text-xs font-bold text-zinc-600 uppercase mb-2">Valor Atual (R$)</label>
-                          <input 
-                            type="number" 
-                            step="0.50" 
-                            value={feeInput} 
-                            onChange={(e) => setFeeInput(e.target.value)} 
-                            className="w-full bg-zinc-50 border border-zinc-300 rounded-2xl px-5 py-4 font-black text-lg" 
-                            placeholder="Ex: 5.00" 
-                            required 
-                          />
+                          <input type="number" step="0.50" value={feeInput} onChange={(e) => setFeeInput(e.target.value)} className="w-full bg-zinc-50 border border-zinc-300 rounded-2xl px-5 py-4 font-black text-lg" placeholder="Ex: 5.00" required />
                         </div>
                         <button type="submit" className="w-full bg-zinc-900 text-white font-black py-4 rounded-2xl shadow-md">Salvar Nova Taxa</button>
                       </form>
+                    </div>
+
+                    {/* Gerenciador de Categorias */}
+                    <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200">
+                      <h3 className="font-black text-xl mb-2">📂 Categorias</h3>
+                      <p className="text-xs text-zinc-500 mb-6">Adicione novas categorias ao seu cardápio ou remova as que não usa mais.</p>
+                      
+                      <form onSubmit={handleAddCategory} className="flex gap-2 mb-4">
+                        <input type="text" value={newCategoryInput} onChange={(e) => setNewCategoryInput(e.target.value)} className="flex-1 bg-zinc-50 border border-zinc-300 rounded-2xl px-4 py-3" placeholder="Nova Categoria" required />
+                        <button type="submit" className="bg-zinc-900 text-white font-black px-6 rounded-2xl">➕</button>
+                      </form>
+
+                      <div className="space-y-2 mt-4">
+                        {customCategories.map(cat => (
+                          <div key={cat} className="flex justify-between items-center bg-zinc-50 p-3 rounded-2xl border border-zinc-200">
+                            <span className="font-bold text-sm text-zinc-800">{cat}</span>
+                            <button onClick={() => handleDeleteCategory(cat)} className="text-red-500 text-lg px-2">🗑️</button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -593,12 +636,20 @@
                     </div>
                     <form className="flex-1 overflow-y-auto space-y-4">
                       <input required type="text" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="Nome" />
-                      <input required type="number" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="Preço" />
-                      <select value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4"><option>Burgers</option><option>Porções</option><option>Bebidas</option><option>Sobremesas</option></select>
+                      <input required type="number" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="Preço (Apenas números)" />
+                      
+                      {/* O Select agora puxa as categorias direto do banco de dados */}
+                      <select value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4">
+                        {customCategories.length === 0 && <option value="">Crie uma categoria primeiro</option>}
+                        {customCategories.map(cat => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                      </select>
+
                       <input type="url" value={newProduct.imageUrl} onChange={e => setNewProduct({...newProduct, imageUrl: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="URL da Imagem (Opcional)" />
-                      <textarea value={newProduct.description} onChange={e => setNewProduct({...newProduct, description: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4 h-24" placeholder="Descrição"></textarea>
+                      <textarea value={newProduct.description} onChange={e => setNewProduct({...newProduct, description: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4 h-24" placeholder="Ingredientes / Descrição"></textarea>
                     </form>
-                    <button onClick={handleAddProduct} className="w-full bg-zinc-900 text-white font-black py-4 rounded-2xl mt-4">Salvar</button>
+                    <button onClick={handleAddProduct} className="w-full bg-zinc-900 text-white font-black py-4 rounded-2xl mt-4">Salvar Produto</button>
                   </div>
                 </div>
               )}
