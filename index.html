@@ -102,6 +102,10 @@
       const [leadFilter, setLeadFilter] = useState('all');
       const [promoTemplate, setPromoTemplate] = useState("Olá [Nome]! Tudo bem? Passando para avisar que hoje o cardápio da Malaguti Brothers está recheado de delícias. Que tal pedir seu lanche favorito agora? 🍔🔥");
 
+      // Estados para Filtro de Período na Análise
+      const [analysisStartDate, setAnalysisStartDate] = useState("");
+      const [analysisEndDate, setAnalysisEndDate] = useState("");
+
       useEffect(() => {
         const { db, collection, onSnapshot, doc } = window.firebaseAPI;
         if (!db) { setLoading(false); return; }
@@ -590,40 +594,39 @@
       const closedCashRegisters = cashRegisters.filter(c => c.status === 'fechado');
       const monthlyRevenue = closedCashRegisters.reduce((acc, c) => acc + (c.totalSales || 0), 0);
 
-      const productSalesCount = {};
-      activeSessionOrders.forEach(o => {
-        if (o.items) {
-          o.items.forEach(item => {
-            productSalesCount[item.name] = (productSalesCount[item.name] || 0) + item.quantity;
-          });
-        }
+      // Filtragem de Pedidos para Análise com base no Período Selecionado
+      const filteredOrdersForAnalysis = orders.filter(o => {
+        if (!analysisStartDate && !analysisEndDate) return true;
+        const orderDateStr = new Date(o.createdAt).toISOString().split('T')[0];
+        if (analysisStartDate && orderDateStr < analysisStartDate) return false;
+        if (analysisEndDate && orderDateStr > analysisEndDate) return false;
+        return true;
       });
 
-      // Inteligência Global de Produtos (Histórico Completo para Análise e Sazonalidade)
       const globalProductStats = {};
       const categorySalesStats = {};
-      const monthlySeasonalityStats = {};
+      const periodSeasonalityStats = {};
+      let periodTotalRevenue = 0;
 
-      orders.forEach(o => {
+      filteredOrdersForAnalysis.forEach(o => {
+        periodTotalRevenue += (o.total || 0);
         const orderDate = new Date(o.createdAt);
         const monthKey = orderDate.toLocaleString('pt-BR', { month: 'long', year: 'numeric' });
         
-        if (!monthlySeasonalityStats[monthKey]) {
-          monthlySeasonalityStats[monthKey] = { revenue: 0, count: 0 };
+        if (!periodSeasonalityStats[monthKey]) {
+          periodSeasonalityStats[monthKey] = { revenue: 0, count: 0 };
         }
-        monthlySeasonalityStats[monthKey].revenue += (o.total || 0);
-        monthlySeasonalityStats[monthKey].count += 1;
+        periodSeasonalityStats[monthKey].revenue += (o.total || 0);
+        periodSeasonalityStats[monthKey].count += 1;
 
         if (o.items) {
           o.items.forEach(item => {
-            // Ranking de Produtos
             if (!globalProductStats[item.name]) {
               globalProductStats[item.name] = { qty: 0, revenue: 0 };
             }
             globalProductStats[item.name].qty += item.quantity;
             globalProductStats[item.name].revenue += (item.price * item.quantity);
 
-            // Vendas por Categoria (buscando a categoria do produto cadastrado)
             const matchedProd = products.find(p => p.name === item.name);
             const cat = matchedProd ? matchedProd.category : 'Outros';
             if (!categorySalesStats[cat]) {
@@ -637,7 +640,7 @@
 
       const sortedGlobalProducts = Object.entries(globalProductStats).sort((a, b) => b[1].qty - a[1].qty);
       const sortedCategories = Object.entries(categorySalesStats).sort((a, b) => b[1].revenue - a[1].revenue);
-      const sortedSeasonality = Object.entries(monthlySeasonalityStats).sort((a, b) => new Date(b[0]) - new Date(a[0]));
+      const sortedSeasonality = Object.entries(periodSeasonalityStats).sort((a, b) => new Date(b[0]) - new Date(a[0]));
 
       const uniqueClientsMap = {};
       orders.forEach(o => {
@@ -1064,7 +1067,6 @@
                   </div>
                 )}
 
-                {/* Aba de Caixa com Retiradas / Sangria */}
                 {pdvTab === 'cash' && (
                   <div className="p-4 space-y-4">
                     {!currentCash ? (
@@ -1155,7 +1157,6 @@
                           </div>
                         </div>
 
-                        {/* Formulário para Registrar Retirada (Sangria) */}
                         <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-200 space-y-3">
                           <h4 className="font-bold text-xs uppercase text-zinc-700">💸 Registrar Retirada (Sangria / Despesa):</h4>
                           <form onSubmit={handleAddWithdrawal} className="space-y-2">
@@ -1219,13 +1220,54 @@
                   </div>
                 )}
 
-                {/* Nova Aba de Análise (Relatórios, Produtos e Sazonalidade) */}
+                {/* Aba de Análise com Filtro por Período Personalizado */}
                 {pdvTab === 'reports' && (
                   <div className="p-4 space-y-6">
-                    {/* Ranking de Produtos */}
+                    {/* Filtro de Período */}
+                    <div className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-200 space-y-3">
+                      <h3 className="font-black text-base flex items-center gap-2">📅 Filtrar por Período</h3>
+                      <p className="text-xs text-zinc-500">Selecione a data inicial e final para analisar o desempenho do período desejado.</p>
+                      
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-bold text-zinc-600 uppercase mb-1">De:</label>
+                          <input 
+                            type="date" 
+                            value={analysisStartDate} 
+                            onChange={(e) => setAnalysisStartDate(e.target.value)} 
+                            className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3 py-2 text-xs font-bold text-zinc-800" 
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-zinc-600 uppercase mb-1">Até:</label>
+                          <input 
+                            type="date" 
+                            value={analysisEndDate} 
+                            onChange={(e) => setAnalysisEndDate(e.target.value)} 
+                            className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3 py-2 text-xs font-bold text-zinc-800" 
+                          />
+                        </div>
+                      </div>
+
+                      {(analysisStartDate || analysisEndDate) && (
+                        <button 
+                          onClick={() => { setAnalysisStartDate(""); setAnalysisEndDate(""); }} 
+                          className="w-full bg-zinc-200 text-zinc-700 py-2 rounded-xl text-xs font-black mt-1"
+                        >
+                          Limpar Filtro (Ver Tudo)
+                        </button>
+                      )}
+
+                      <div className="bg-zinc-900 text-white p-4 rounded-2xl mt-3">
+                        <span className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">Faturamento no Período Selecionado</span>
+                        <h2 className="text-2xl font-black text-amber-500 mt-0.5">R$ {periodTotalRevenue.toFixed(2)}</h2>
+                        <p className="text-[11px] text-zinc-400">{filteredOrdersForAnalysis.length} pedidos no total</p>
+                      </div>
+                    </div>
+
+                    {/* Ranking de Produtos no Período */}
                     <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200 space-y-3">
-                      <h3 className="font-black text-base flex items-center gap-2">🏆 Ranking de Produtos</h3>
-                      <p className="text-xs text-zinc-500">Saiba quais lanches e bebidas saem mais (do mais vendido ao menos vendido).</p>
+                      <h3 className="font-black text-base flex items-center gap-2">🏆 Ranking de Produtos (Período)</h3>
                       
                       <div className="space-y-2 mt-2 max-h-60 overflow-y-auto">
                         {sortedGlobalProducts.map(([name, stats], idx) => (
@@ -1242,14 +1284,13 @@
                             <span className="font-black bg-zinc-200 text-zinc-800 px-3 py-1 rounded-full text-xs">{stats.qty} un</span>
                           </div>
                         ))}
-                        {sortedGlobalProducts.length === 0 && <p className="text-xs text-zinc-400 text-center py-6">Nenhum produto vendido ainda.</p>}
+                        {sortedGlobalProducts.length === 0 && <p className="text-xs text-zinc-400 text-center py-6">Nenhum produto vendido neste período.</p>}
                       </div>
                     </div>
 
-                    {/* Desempenho por Categoria */}
+                    {/* Desempenho por Categoria no Período */}
                     <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200 space-y-3">
                       <h3 className="font-black text-base flex items-center gap-2">📊 Desempenho por Categoria</h3>
-                      <p className="text-xs text-zinc-500">Compare o que mais gera receita (Burgers vs Bebidas vs Sobremesas).</p>
                       
                       <div className="space-y-2 mt-2">
                         {sortedCategories.map(([cat, stats]) => (
@@ -1265,10 +1306,9 @@
                       </div>
                     </div>
 
-                    {/* Sazonalidade Mensal (Dezembro vs Janeiro) */}
+                    {/* Sazonalidade por Mês */}
                     <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200 space-y-3">
-                      <h3 className="font-black text-base flex items-center gap-2">📅 Análise de Sazonalidade (Mês a Mês)</h3>
-                      <p className="text-xs text-zinc-500">Identifique em qual mês o movimento sobe ou cai para planejar promoções.</p>
+                      <h3 className="font-black text-base flex items-center gap-2">📅 Sazonalidade (Mês a Mês)</h3>
                       
                       <div className="space-y-2 mt-2">
                         {sortedSeasonality.map(([monthName, data]) => (
