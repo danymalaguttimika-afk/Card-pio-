@@ -27,7 +27,7 @@
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
     import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
-    import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+    import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
     const firebaseConfig = {
       apiKey: "AIzaSyAzCDS15N2e8hdP5wrQEzDNvZKBOAdeYjw",
@@ -42,7 +42,7 @@
     window.firebaseAPI = {
       auth: getAuth(app),
       db: getFirestore(app),
-      collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, signInAnonymously, onAuthStateChanged
+      collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, setDoc, signInAnonymously, onAuthStateChanged
     };
     window.dispatchEvent(new Event('firebase-ready'));
   </script>
@@ -57,6 +57,7 @@
       const [view, setView] = useState('menu');
       const [products, setProducts] = useState([]);
       const [orders, setOrders] = useState([]);
+      const [deliveryFee, setDeliveryFee] = useState(5.00); // Taxa padrão inicial
       const [loading, setLoading] = useState(true);
 
       const [cart, setCart] = useState([]);
@@ -76,6 +77,7 @@
       const [orderFilter, setOrderFilter] = useState('pendente');
       const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false);
       const [newProduct, setNewProduct] = useState({ name: '', price: '', category: 'Burgers', description: '', imageUrl: '' });
+      const [feeInput, setFeeInput] = useState("5.00");
 
       useEffect(() => {
         const init = () => {
@@ -89,18 +91,29 @@
 
       useEffect(() => {
         if (!user) return;
-        const { db, collection, onSnapshot } = window.firebaseAPI;
+        const { db, collection, onSnapshot, doc } = window.firebaseAPI;
         
         const unsubProducts = onSnapshot(collection(db, 'products'), (snap) => {
           setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         });
+
         const unsubOrders = onSnapshot(collection(db, 'orders'), (snap) => {
           const ords = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           ords.sort((a, b) => b.createdAt - a.createdAt);
           setOrders(ords);
           setLoading(false);
         });
-        return () => { unsubProducts(); unsubOrders(); };
+
+        // Sincroniza a taxa de entrega em tempo real
+        const unsubConfig = onSnapshot(doc(db, 'settings', 'config'), (docSnap) => {
+          if (docSnap.exists()) {
+            const fee = docSnap.data().fee || 5.00;
+            setDeliveryFee(fee);
+            setFeeInput(fee.toString());
+          }
+        });
+
+        return () => { unsubProducts(); unsubOrders(); unsubConfig(); };
       }, [user]);
 
       const handlePdvAccess = () => {
@@ -109,6 +122,20 @@
           setView('pdv');
         } else if (senha !== null) {
           alert("Senha incorreta! Acesso negado.");
+        }
+      };
+
+      const handleSaveFee = async (e) => {
+        e.preventDefault();
+        const parsedFee = parseFloat(feeInput);
+        if (isNaN(parsedFee) || parsedFee < 0) return alert("Digite um valor válido para a taxa.");
+        
+        try {
+          const { db, doc, setDoc } = window.firebaseAPI;
+          await setDoc(doc(db, 'settings', 'config'), { fee: parsedFee }, { merge: true });
+          alert("Taxa de entrega atualizada com sucesso!");
+        } catch (error) {
+          alert("Erro ao salvar taxa.");
         }
       };
 
@@ -130,7 +157,8 @@
         }));
       };
 
-      const cartTotal = cart.reduce((acc, item) => acc + (parseFloat(item.price) * item.quantity), 0);
+      const itemsTotal = cart.reduce((acc, item) => acc + (parseFloat(item.price) * item.quantity), 0);
+      const cartTotal = itemsTotal + deliveryFee;
 
       const handleCheckout = async () => {
         if (cart.length === 0) return;
@@ -149,12 +177,16 @@
         cart.forEach(item => {
           text += `${item.quantity}x ${item.name} - R$ ${(parseFloat(item.price) * item.quantity).toFixed(2)}\n`;
         });
-        text += `\n*Total:* R$ ${cartTotal.toFixed(2)}\n\n_Confirme a forma de pagamento._`;
+        text += `\nSubtotal: R$ ${itemsTotal.toFixed(2)}`;
+        text += `\nTaxa de Entrega: R$ ${deliveryFee.toFixed(2)}`;
+        text += `\n*Total Geral:* R$ ${cartTotal.toFixed(2)}\n\n_Confirme a forma de pagamento._`;
 
         try {
           const { db, collection, addDoc } = window.firebaseAPI;
           await addDoc(collection(db, 'orders'), {
-            customerName, customerPhone, customerAddress: addressText, phone: WHATSAPP_NUMBER, items: cart, total: cartTotal, status: 'pendente', source: 'whatsapp', createdAt: Date.now()
+            customerName, customerPhone, customerAddress: addressText, 
+            items: cart, subtotal: itemsTotal, deliveryFee: deliveryFee, total: cartTotal, 
+            phone: WHATSAPP_NUMBER, status: 'pendente', source: 'whatsapp', createdAt: Date.now()
           });
           const waUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
           window.open(waUrl, '_blank');
@@ -208,8 +240,10 @@
         }
       };
 
-      // Novo Sistema de Impressão Definitivo
       const printOrder = (order) => {
+        const subtotal = order.subtotal !== undefined ? order.subtotal : (order.total - (order.deliveryFee || 0));
+        const fee = order.deliveryFee !== undefined ? order.deliveryFee : 0;
+
         let html = `
           <!DOCTYPE html>
           <html><head><title>Impressão</title>
@@ -244,7 +278,11 @@
                   </tr>
                 `).join('')}
               </table>
-              <div class="text-right" style="margin-top: 10px; border-top: 1px dashed black; padding-top: 10px; font-size: 16px;">
+              <div style="border-top: 1px dashed black; margin-top: 10px; padding-top: 5px; font-size: 14px;">
+                <div style="display: flex; justify-content: space-between;"><span>Subtotal:</span><span>R$ ${subtotal.toFixed(2)}</span></div>
+                <div style="display: flex; justify-content: space-between;"><span>Taxa Entrega:</span><span>R$ ${fee.toFixed(2)}</span></div>
+              </div>
+              <div class="text-right" style="margin-top: 5px; border-top: 1px dashed black; padding-top: 5px; font-size: 16px;">
                 <strong>TOTAL: R$ ${order.total.toFixed(2)}</strong>
               </div>
             </div>
@@ -268,7 +306,6 @@
         iframe.contentWindow.document.write(html);
         iframe.contentWindow.document.close();
 
-        // Dá meio segundo para a impressora ler o código escondido
         setTimeout(() => {
           iframe.contentWindow.focus();
           iframe.contentWindow.print();
@@ -389,6 +426,15 @@
                           </div>
                         </div>
                       ))}
+
+                      {/* Resumo de Subtotal, Taxa de Entrega e Total */}
+                      <div className="bg-zinc-950 p-4 rounded-2xl border border-zinc-800 space-y-2 text-sm text-zinc-300">
+                        <div className="flex justify-between"><span>Subtotal dos itens:</span> <span>R$ {itemsTotal.toFixed(2)}</span></div>
+                        <div className="flex justify-between"><span>Taxa de Entrega:</span> <span>R$ {deliveryFee.toFixed(2)}</span></div>
+                        <div className="flex justify-between text-base font-black text-amber-500 pt-2 border-t border-zinc-800">
+                          <span>Total Geral:</span> <span>R$ {cartTotal.toFixed(2)}</span>
+                        </div>
+                      </div>
                     </div>
                     
                     <div className="p-6 bg-zinc-950 border-t border-zinc-800 rounded-t-3xl">
@@ -404,7 +450,7 @@
                       <input type="text" value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Referência (Opcional)" className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl px-5 py-3 text-white mb-4" />
                       
                       <button onClick={handleCheckout} className="w-full bg-[#25D366] text-white py-4 rounded-2xl font-black text-lg flex items-center justify-center gap-3">
-                        💬 Enviar Pedido
+                        💬 Enviar Pedido (R$ {cartTotal.toFixed(2)})
                       </button>
                     </div>
                   </div>
@@ -439,11 +485,17 @@
                           {order.customerPhone && <p className="text-xs text-zinc-500 mt-1">📱 {order.customerPhone}</p>}
                           {order.customerAddress && <p className="text-xs text-zinc-500 mt-1 leading-tight">📍 {order.customerAddress}</p>}
                           
-                          <div className="bg-zinc-50 rounded-2xl p-4 my-4">
+                          <div className="bg-zinc-50 rounded-2xl p-4 my-4 space-y-1">
                             {order.items.map((item, idx) => (
-                              <div key={idx} className="text-sm py-1"><span className="font-black mr-1">{item.quantity}x</span> {item.name}</div>
+                              <div key={idx} className="text-sm py-0.5"><span className="font-black mr-1">{item.quantity}x</span> {item.name}</div>
                             ))}
+                            <div className="pt-2 mt-2 border-t border-zinc-200 text-xs text-zinc-600 space-y-1">
+                              <div className="flex justify-between"><span>Subtotal:</span> <span>R$ {(order.subtotal || (order.total - (order.deliveryFee || 0))).toFixed(2)}</span></div>
+                              <div className="flex justify-between"><span>Taxa Entrega:</span> <span>R$ {(order.deliveryFee || 0).toFixed(2)}</span></div>
+                              <div className="flex justify-between font-black text-sm text-zinc-900 pt-1"><span>Total:</span> <span>R$ {order.total.toFixed(2)}</span></div>
+                            </div>
                           </div>
+                          
                           <div className="flex gap-2">
                             <button onClick={() => printOrder(order)} className="w-12 h-12 bg-zinc-100 rounded-2xl flex items-center justify-center text-xl">🖨️</button>
                             <button onClick={() => handleDeleteOrder(order.id)} className="w-12 h-12 bg-red-100 text-red-500 rounded-2xl flex items-center justify-center text-xl">🗑️</button>
@@ -475,6 +527,32 @@
                     <button onClick={() => setIsAddProductModalOpen(true)} className="fixed bottom-24 right-6 w-14 h-14 bg-zinc-900 text-white rounded-full text-2xl flex items-center justify-center shadow-lg">➕</button>
                   </div>
                 )}
+
+                {/* Nova Aba de Ajustes / Taxa de Entrega */}
+                {pdvTab === 'config' && (
+                  <div className="p-6">
+                    <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200">
+                      <h3 className="font-black text-xl mb-2">⚙️ Taxa de Entrega</h3>
+                      <p className="text-xs text-zinc-500 mb-6">Defina o valor da taxa que será somada automaticamente em todos os pedidos dos clientes.</p>
+                      
+                      <form onSubmit={handleSaveFee} className="space-y-4">
+                        <div>
+                          <label className="block text-xs font-bold text-zinc-600 uppercase mb-2">Valor Atual (R$)</label>
+                          <input 
+                            type="number" 
+                            step="0.50" 
+                            value={feeInput} 
+                            onChange={(e) => setFeeInput(e.target.value)} 
+                            className="w-full bg-zinc-50 border border-zinc-300 rounded-2xl px-5 py-4 font-black text-lg" 
+                            placeholder="Ex: 5.00" 
+                            required 
+                          />
+                        </div>
+                        <button type="submit" className="w-full bg-zinc-900 text-white font-black py-4 rounded-2xl shadow-md">Salvar Nova Taxa</button>
+                      </form>
+                    </div>
+                  </div>
+                )}
               </main>
 
               {isAddProductModalOpen && (
@@ -496,10 +574,12 @@
                 </div>
               )}
 
+              {/* Menu Inferior do PDV com 3 Abas */}
               <nav className="fixed bottom-0 w-full max-w-md bg-white border-t border-zinc-200 z-30">
                 <div className="flex justify-around p-3">
-                  <button onClick={() => setPdvTab('orders')} className={`font-bold p-2 ${pdvTab === 'orders' ? 'text-amber-500' : 'text-zinc-400'}`}>Pedidos</button>
-                  <button onClick={() => setPdvTab('products')} className={`font-bold p-2 ${pdvTab === 'products' ? 'text-amber-500' : 'text-zinc-400'}`}>Cardápio</button>
+                  <button onClick={() => setPdvTab('orders')} className={`font-bold p-2 text-sm ${pdvTab === 'orders' ? 'text-amber-500' : 'text-zinc-400'}`}>Pedidos</button>
+                  <button onClick={() => setPdvTab('products')} className={`font-bold p-2 text-sm ${pdvTab === 'products' ? 'text-amber-500' : 'text-zinc-400'}`}>Cardápio</button>
+                  <button onClick={() => setPdvTab('config')} className={`font-bold p-2 text-sm ${pdvTab === 'config' ? 'text-amber-500' : 'text-zinc-400'}`}>Ajustes</button>
                 </div>
               </nav>
             </div>
