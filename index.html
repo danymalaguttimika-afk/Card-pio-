@@ -96,8 +96,7 @@
       const [newAddonName, setNewAddonName] = useState("");
       const [newAddonPrice, setNewAddonPrice] = useState("");
 
-      // Estados para Gestão de Leads e Campanhas
-      const [leadFilter, setLeadFilter] = useState('all'); // all, loyal, churned
+      const [leadFilter, setLeadFilter] = useState('all');
       const [promoTemplate, setPromoTemplate] = useState("Olá [Nome]! Tudo bem? Passando para avisar que hoje o cardápio da Malaguti Brothers está recheado de delícias. Que tal pedir seu lanche favorito agora? 🍔🔥");
 
       useEffect(() => {
@@ -268,6 +267,46 @@
       const handleTogglePause = async (product) => {
         const { db, doc, updateDoc } = window.firebaseAPI;
         await updateDoc(doc(db, 'products', product.id), { paused: !product.paused });
+      };
+
+      // Função para compactar e converter a foto da câmera/galeria para Base64
+      const handleImageUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (uploadEvent) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const MAX_WIDTH = 400;
+            const MAX_HEIGHT = 400;
+            let width = img.width;
+            let height = img.height;
+
+            if (width > height) {
+              if (width > MAX_WIDTH) {
+                height *= MAX_WIDTH / width;
+                width = MAX_WIDTH;
+              }
+            } else {
+              if (height > MAX_HEIGHT) {
+                width *= MAX_HEIGHT / height;
+                height = MAX_HEIGHT;
+              }
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+            
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+            setNewProduct(prev => ({ ...prev, imageUrl: dataUrl }));
+          };
+          img.src = uploadEvent.target.result;
+        };
+        reader.readAsDataURL(file);
       };
 
       const addToCartWithAddons = (product) => {
@@ -514,7 +553,6 @@
         }
       });
 
-      // Extração inteligente de Leads (Clientes) com contagem de pedidos e inatividade (dias sem pedir)
       const uniqueClientsMap = {};
       orders.forEach(o => {
         if (o.customerPhone) {
@@ -544,7 +582,6 @@
       });
       uniqueClients.sort((a, b) => b.lastOrderAt - a.lastOrderAt);
 
-      // Filtragem de Leads
       const displayedClients = uniqueClients.filter(c => {
         if (leadFilter === 'loyal') return c.ordersCount >= 2;
         if (leadFilter === 'churned') return c.daysAgo >= 15;
@@ -863,6 +900,9 @@
                   <div className="p-4">
                     {products.map(product => (
                       <div key={product.id} className={`bg-white p-3 rounded-2xl flex gap-4 mb-3 border items-center ${product.paused ? 'border-amber-400 bg-amber-50/50 opacity-75' : 'border-zinc-200'}`}>
+                        <div className="w-12 h-12 shrink-0 rounded-xl bg-zinc-100 flex items-center justify-center overflow-hidden">
+                          {product.imageUrl ? <img src={product.imageUrl} className="w-full h-full object-cover" /> : <span>🍔</span>}
+                        </div>
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
                             <h4 className="font-bold text-sm">{product.name}</h4>
@@ -883,10 +923,8 @@
                   </div>
                 )}
 
-                {/* Aba de Clientes & Campanhas de Promoção em Massa */}
                 {pdvTab === 'clients' && (
                   <div className="p-4 space-y-4">
-                    {/* Painel de Disparo de Promoções */}
                     <div className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-200 space-y-3">
                       <h3 className="font-black text-base flex items-center gap-2">📢 Campanhas de WhatsApp</h3>
                       <p className="text-xs text-zinc-500 leading-tight">Escreva sua mensagem abaixo. A tag <code className="bg-zinc-100 text-amber-600 px-1 py-0.5 rounded font-mono font-bold">[Nome]</code> será substituída automaticamente pelo nome de cada cliente ao clicar em chamar.</p>
@@ -897,7 +935,6 @@
                         className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-3 text-xs text-zinc-800 h-24 focus:outline-none focus:border-amber-500 font-sans" 
                       />
 
-                      {/* Filtros de Leads */}
                       <div className="flex bg-zinc-100 p-1 rounded-2xl">
                         <button onClick={() => setLeadFilter('all')} className={`flex-1 py-2 rounded-xl text-xs font-bold ${leadFilter === 'all' ? 'bg-amber-500 text-black' : 'text-zinc-500'}`}>Todos ({uniqueClients.length})</button>
                         <button onClick={() => setLeadFilter('loyal')} className={`flex-1 py-2 rounded-xl text-xs font-bold ${leadFilter === 'loyal' ? 'bg-amber-500 text-black' : 'text-zinc-500'}`}>Fiéis (2+)</button>
@@ -905,7 +942,6 @@
                       </div>
                     </div>
 
-                    {/* Lista de Leads */}
                     <div className="space-y-3">
                       {displayedClients.map(client => {
                         const customMsg = promoTemplate.replace(/\[Nome\]/g, client.name);
@@ -1102,6 +1138,7 @@
                 )}
               </main>
 
+              {/* Modal de Cadastro de Produto com Seletor de Câmera e Galeria */}
               {isAddProductModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60">
                   <div className="bg-white w-full max-w-md rounded-t-[2rem] p-6 relative z-10 h-[85vh] flex flex-col">
@@ -1110,19 +1147,49 @@
                       <button onClick={() => setIsAddProductModalOpen(false)}>✖️</button>
                     </div>
                     <form className="flex-1 overflow-y-auto space-y-4">
-                      <input required type="text" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="Nome do Produto" />
+                      <input required type="text" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4 text-sm" placeholder="Nome do Produto" />
                       
                       <div className="flex gap-2">
-                          <select value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="flex-1 bg-zinc-50 border border-zinc-200 rounded-2xl p-4">
+                          <select value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="flex-1 bg-zinc-50 border border-zinc-200 rounded-2xl p-4 text-sm">
                             {customCategories.length === 0 && <option value="">Sem categoria</option>}
                             {customCategories.map(cat => (<option key={cat} value={cat}>{cat}</option>))}
                           </select>
-                          <button type="button" onClick={handleQuickAddCategory} className="bg-amber-500 text-zinc-950 font-black px-4 rounded-2xl whitespace-nowrap">➕ Nova</button>
+                          <button type="button" onClick={handleQuickAddCategory} className="bg-amber-500 text-zinc-950 font-black px-4 rounded-2xl text-xs whitespace-nowrap">➕ Nova</button>
                       </div>
 
-                      <input required type="number" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="Preço" />
-                      <input type="url" value={newProduct.imageUrl} onChange={e => setNewProduct({...newProduct, imageUrl: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="URL da Foto (Opcional)" />
-                      <textarea value={newProduct.description} onChange={e => setNewProduct({...newProduct, description: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4 h-24" placeholder="Descrição / Ingredientes"></textarea>
+                      <input required type="number" step="0.50" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4 text-sm" placeholder="Preço (Ex: 35.00)" />
+                      
+                      {/* Seletor de Foto Nativo (Câmera ou Galeria) */}
+                      <div className="bg-zinc-50 border border-zinc-200 rounded-2xl p-4 space-y-3">
+                        <label className="block text-xs font-bold text-zinc-600 uppercase">Foto do Produto:</label>
+                        <div className="flex items-center gap-4">
+                          <div className="w-20 h-20 rounded-xl bg-zinc-200 flex items-center justify-center overflow-hidden shrink-0 border border-zinc-300">
+                            {newProduct.imageUrl ? (
+                              <img src={newProduct.imageUrl} className="w-full h-full object-cover" />
+                            ) : (
+                              <span className="text-2xl">🍔</span>
+                            )}
+                          </div>
+                          <div className="flex-1">
+                            <input 
+                              type="file" 
+                              accept="image/*" 
+                              id="cameraInput" 
+                              onChange={handleImageUpload} 
+                              className="hidden" 
+                            />
+                            <label 
+                              htmlFor="cameraInput" 
+                              className="w-full bg-zinc-900 text-white py-3 px-4 rounded-xl text-xs font-black flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+                            >
+                              📷 Tirar Foto / Galeria
+                            </label>
+                            <p className="text-[10px] text-zinc-400 mt-1.5">Escolha da galeria do celular ou abra a câmera para fotografar na hora.</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <textarea value={newProduct.description} onChange={e => setNewProduct({...newProduct, description: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4 h-24 text-sm" placeholder="Descrição / Ingredientes"></textarea>
                     </form>
                     <button onClick={handleAddProduct} className="w-full bg-zinc-900 text-white font-black py-4 rounded-2xl mt-4">Salvar Produto</button>
                   </div>
