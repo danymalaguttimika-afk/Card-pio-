@@ -4,10 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Malaguti Brothers</title>
+  
+  <!-- Ferramentas e Estilos -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.6/babel.min.js"></script>
+  
   <style>
     ::-webkit-scrollbar { display: none; }
     * { -ms-overflow-style: none; scrollbar-width: none; -webkit-tap-highlight-color: transparent; }
@@ -22,9 +25,16 @@
 <body class="bg-zinc-950 text-white selection:bg-amber-500 selection:text-white">
   
   <div id="print-area" class="hidden"></div>
-  <div id="root"></div>
+  
+  <!-- Base do Aplicativo com Trava de Segurança -->
+  <div id="root">
+    <div style="color: #f59e0b; text-align: center; padding: 50px; font-family: sans-serif;">
+      <h2 style="font-weight: bold; font-size: 24px; margin-bottom: 10px;">Carregando...</h2>
+      <p style="color: #a1a1aa; font-size: 14px;">Se esta tela não sumir em 5 segundos, o código não foi copiado por completo até o final. Tente colar novamente!</p>
+    </div>
+  </div>
 
-  <!-- Configuração do Firebase com suas chaves -->
+  <!-- Banco de Dados Firebase -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
     import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
@@ -48,11 +58,11 @@
     window.dispatchEvent(new Event('firebase-ready'));
   </script>
 
-  <!-- Aplicativo Malaguti Brothers -->
+  <!-- Sistema Malaguti Brothers -->
   <script type="text/babel">
     const { useState, useEffect } = React;
-    const WHATSAPP_NUMBER = "5511999999999"; // Substitua pelo seu WhatsApp depois
-    const LOGO_URL = "https://cdn-icons-png.flaticon.com/512/3014/3014491.png"; // Substitua pelo link da sua logo sem fundo depois
+    const WHATSAPP_NUMBER = "5511999999999"; 
+    const LOGO_URL = "https://cdn-icons-png.flaticon.com/512/3014/3014491.png"; 
 
     function App() {
       const [user, setUser] = useState(null);
@@ -193,7 +203,6 @@
       return (
         <div className="min-h-screen relative pb-20 w-full overflow-x-hidden font-sans no-print">
           
-          {/* BOTÃO MÁGICO DE TESTE (Canto Superior Direito) */}
           <div className="fixed top-2 right-2 z-50 bg-zinc-800/80 p-1 rounded-full flex gap-1 border border-zinc-700 shadow-xl backdrop-blur-md">
             <button onClick={() => setView('menu')} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-colors ${view === 'menu' ? 'bg-amber-500 text-black' : 'text-zinc-400'}`}>Cliente</button>
             <button onClick={() => setView('pdv')} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-colors ${view === 'pdv' ? 'bg-amber-500 text-black' : 'text-zinc-400'}`}>PDV</button>
@@ -341,4 +350,36 @@
 
               {isAddProductModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60">
-                  <div className="bg-white w-full max-w-md rounded-t-[2rem] p-6 relative z-10 h-[8
+                  <div className="bg-white w-full max-w-md rounded-t-[2rem] p-6 relative z-10 h-[85vh] flex flex-col">
+                    <div className="flex justify-between items-center mb-6">
+                      <h3 className="font-black text-2xl">Novo Produto</h3>
+                      <button onClick={() => setIsAddProductModalOpen(false)}>✖️</button>
+                    </div>
+                    <form className="flex-1 overflow-y-auto space-y-4">
+                      <input required type="text" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="Nome" />
+                      <input required type="number" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="Preço" />
+                      <select value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4"><option>Burgers</option><option>Porções</option><option>Bebidas</option><option>Sobremesas</option></select>
+                      <input type="url" value={newProduct.imageUrl} onChange={e => setNewProduct({...newProduct, imageUrl: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="URL da Imagem" />
+                      <textarea value={newProduct.description} onChange={e => setNewProduct({...newProduct, description: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4 h-24" placeholder="Descrição"></textarea>
+                    </form>
+                    <button onClick={handleAddProduct} className="w-full bg-zinc-900 text-white font-black py-4 rounded-2xl mt-4">Salvar</button>
+                  </div>
+                </div>
+              )}
+
+              <nav className="fixed bottom-0 w-full max-w-md bg-white border-t border-zinc-200 z-30">
+                <div className="flex justify-around p-3">
+                  <button onClick={() => setPdvTab('orders')} className={`font-bold p-2 ${pdvTab === 'orders' ? 'text-amber-500' : 'text-zinc-400'}`}>Pedidos</button>
+                  <button onClick={() => setPdvTab('products')} className={`font-bold p-2 ${pdvTab === 'products' ? 'text-amber-500' : 'text-zinc-400'}`}>Cardápio</button>
+                </div>
+              </nav>
+            </div>
+          )}
+        </div>
+      );
+    }
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
