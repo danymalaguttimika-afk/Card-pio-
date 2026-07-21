@@ -51,7 +51,7 @@
   </script>
 
   <script type="text/babel">
-    const { useState, useEffect } = React;
+    const { useState, useEffect, useRef } = React;
     const WHATSAPP_NUMBER = "5511999999999"; 
     const LOGO_URL = "https://cdn-icons-png.flaticon.com/512/3014/3014491.png"; 
 
@@ -83,7 +83,6 @@
       const [neighborhood, setNeighborhood] = useState("");
       const [reference, setReference] = useState("");
       
-      // Estado da nova tela de sucesso do pedido
       const [orderSuccess, setOrderSuccess] = useState(null);
 
       const [activeCategory, setActiveCategory] = useState("Todos");
@@ -108,6 +107,10 @@
       const [analysisStartDate, setAnalysisStartDate] = useState("");
       const [analysisEndDate, setAnalysisEndDate] = useState("");
 
+      // Ref para acompanhar em qual tela estamos, para não apitar para o cliente
+      const viewRef = useRef(view);
+      useEffect(() => { viewRef.current = view; }, [view]);
+
       useEffect(() => {
         const { db, collection, onSnapshot, doc } = window.firebaseAPI;
         if (!db) { setLoading(false); return; }
@@ -117,7 +120,19 @@
           setLoading(false);
         }, (err) => { console.error(err); setLoading(false); });
 
+        // Controle para não apitar ao carregar a página pela primeira vez
+        let isInitialOrdersLoad = true;
         const unsubOrders = onSnapshot(collection(db, 'orders'), (snap) => {
+          // Se estamos no PDV e não é o carregamento inicial, e houve uma adição de pedido:
+          if (!isInitialOrdersLoad && viewRef.current === 'pdv') {
+            const hasNewOrder = snap.docChanges().some(change => change.type === 'added');
+            if (hasNewOrder) {
+              const audio = new Audio('https://actions.google.com/sounds/v1/alarms/positive_beeps.ogg');
+              audio.play().catch(e => console.log('Áudio bloqueado pelo navegador:', e));
+            }
+          }
+          isInitialOrdersLoad = false;
+
           const ords = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           ords.sort((a, b) => b.createdAt - a.createdAt);
           setOrders(ords);
@@ -416,14 +431,12 @@
 
         try {
           const { db, collection, addDoc } = window.firebaseAPI;
-          // Salva no banco de dados do PDV
           await addDoc(collection(db, 'orders'), {
             customerName, customerPhone, customerAddress: addressText, 
             items: cart, subtotal: itemsTotal, deliveryFee: deliveryFee, total: cartTotal, 
             paymentMethod: paymentMethod, phone: WHATSAPP_NUMBER, status: 'pendente', source: 'whatsapp', createdAt: Date.now()
           });
           
-          // Abre a tela de SUCESSO (fechando o carrinho e não enviando pro zap automaticamente)
           setOrderSuccess({
             customerName,
             paymentMethod,
@@ -676,7 +689,6 @@
             <button onClick={handlePdvAccess} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-colors ${view === 'pdv' ? 'bg-amber-500 text-black' : 'text-zinc-400'}`}>PDV 🔒</button>
           </div>
 
-          {/* Tela de Sucesso de Pedido (Modal Final) */}
           {orderSuccess && (
              <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
                  <div className="bg-zinc-900 rounded-[2.5rem] p-8 max-w-sm w-full text-center border border-zinc-800 shadow-2xl relative overflow-hidden">
@@ -693,7 +705,7 @@
                              <p className="text-amber-500 text-xs font-black uppercase mb-2">⚠️ Falta só um detalhe!</p>
                              <p className="text-zinc-300 text-xs mb-4">Como você escolheu Pix, envie o comprovante no nosso WhatsApp para a cozinha iniciar o preparo.</p>
                              <a 
-                                href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(`Olá, sou ${orderSuccess.customerName} e acabei de fazer um pedido no site. Segue meu comprovante Pix no valor de R$ ${orderSuccess.total.toFixed(2)}!`)}`} 
+                                href={`https://wa.me/5511999999999?text=${encodeURIComponent(`Olá, sou ${orderSuccess.customerName} e acabei de fazer um pedido no site. Segue meu comprovante Pix no valor de R$ ${orderSuccess.total.toFixed(2)}!`)}`} 
                                 target="_blank" 
                                 className="flex items-center justify-center gap-2 w-full bg-[#25D366] text-white py-3.5 rounded-xl font-black text-sm shadow-md"
                              >
@@ -702,7 +714,7 @@
                          </div>
                      ) : (
                          <div className="bg-zinc-950 rounded-2xl p-4 mb-6 border border-zinc-800 text-xs text-zinc-400">
-                             Fique de olho no seu celular. Qualquer dúvida, o nosso entregador ou a nossa equipe entrará em contato.
+                             Fique de olho no seu celular. Qualquer dúvida, a nossa equipe entrará em contato.
                          </div>
                      )}
 
@@ -774,7 +786,6 @@
                         <p className="text-zinc-400 text-sm">{selectedProduct.description || "Sem descrição detalhada."}</p>
                       </div>
 
-                      {/* Campo de Retiradas / Observações */}
                       <div className="bg-zinc-950 p-4 rounded-2xl border border-zinc-800 space-y-2">
                         <h3 className="font-bold text-zinc-300 uppercase text-xs tracking-wider">Retiradas / Observações:</h3>
                         <input 
@@ -841,7 +852,6 @@
                     </div>
 
                     <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                      {/* Itens na Sacola */}
                       <div className="space-y-3">
                         <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Seu Pedido:</h3>
                         {cart.map(item => (
@@ -867,7 +877,6 @@
                         ))}
                       </div>
 
-                      {/* Totais */}
                       <div className="bg-zinc-950 p-4 rounded-2xl border border-zinc-800 space-y-2 text-sm text-zinc-300">
                         <div className="flex justify-between"><span>Subtotal:</span> <span>R$ {itemsTotal.toFixed(2)}</span></div>
                         <div className="flex justify-between"><span>Taxa de Entrega:</span> <span>R$ {deliveryFee.toFixed(2)}</span></div>
@@ -876,7 +885,6 @@
                         </div>
                       </div>
 
-                      {/* Dados de Entrega e Pagamento Obrigatórios */}
                       <div className="space-y-3 pt-2">
                         <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Dados de Entrega & Pagamento:</h3>
                         
@@ -891,7 +899,6 @@
                         <input type="text" value={neighborhood} onChange={(e) => setNeighborhood(e.target.value)} placeholder="Bairro" className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl px-5 py-3 text-white text-sm" required />
                         <input type="text" value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Ponto de Referência (Opcional)" className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl px-5 py-3 text-white text-sm" />
 
-                        {/* Seleção de Pagamento */}
                         <div className="pt-2">
                           <label className="block text-xs font-bold text-zinc-400 uppercase mb-2">Forma de Pagamento (Obrigatório):</label>
                           <div className="grid grid-cols-3 gap-2">
@@ -903,7 +910,6 @@
                           </div>
                         </div>
 
-                        {/* Se escolher Pix, exibe a Chave Pix Copia e Cola instantânea */}
                         {paymentMethod === 'Pix' && (
                           <div className="bg-zinc-950 p-4 rounded-2xl border border-amber-500/50 space-y-3 mt-3">
                             <div className="flex items-center justify-between">
@@ -1095,7 +1101,6 @@
                   </div>
                 )}
 
-                {/* Aba de Caixa */}
                 {pdvTab === 'cash' && (
                   <div className="p-4 space-y-4">
                     {!currentCash ? (
@@ -1230,6 +1235,17 @@
                           )}
                         </div>
 
+                        <h4 className="font-bold text-sm uppercase text-zinc-600 pt-2">Produtos vendidos hoje:</h4>
+                        <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                          {Object.entries(productSalesCount).map(([prodName, qty]) => (
+                            <div key={prodName} className="flex justify-between items-center bg-zinc-50 px-3 py-2 rounded-xl border border-zinc-200 text-xs">
+                              <span className="font-medium text-zinc-800">{prodName}</span>
+                              <span className="font-black bg-zinc-200 px-2 py-0.5 rounded-full">{qty} un</span>
+                            </div>
+                          ))}
+                          {Object.keys(productSalesCount).length === 0 && <p className="text-xs text-zinc-400 text-center py-2">Nenhuma venda nesta sessão.</p>}
+                        </div>
+
                         <button onClick={handleCloseCash} className="w-full bg-red-600 text-white font-black py-4 rounded-2xl shadow-md text-sm mt-4">
                           🔒 Fechar Caixa do Dia
                         </button>
@@ -1238,7 +1254,6 @@
                   </div>
                 )}
 
-                {/* Aba de Análise com Filtro por Período Personalizado */}
                 {pdvTab === 'reports' && (
                   <div className="p-4 space-y-6">
                     <div className="bg-white rounded-3xl p-5 shadow-sm border border-zinc-200 space-y-3">
@@ -1392,7 +1407,6 @@
                 )}
               </main>
 
-              {/* Modal de Cadastro de Produto com Seletor de Câmera e Galeria */}
               {isAddProductModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60">
                   <div className="bg-white w-full max-w-md rounded-t-[2rem] p-6 relative z-10 h-[85vh] flex flex-col">
