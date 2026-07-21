@@ -73,7 +73,7 @@
       const [isCartOpen, setIsCartOpen] = useState(false);
       const [selectedProduct, setSelectedProduct] = useState(null);
       const [selectedAddons, setSelectedAddons] = useState({});
-      const [productNote, setProductNote] = useState(""); // Campo de observação / retirada do item
+      const [productNote, setProductNote] = useState("");
       const [paymentMethod, setPaymentMethod] = useState("Pix"); 
       
       const [customerName, setCustomerName] = useState("");
@@ -295,14 +295,16 @@
         setProductNote("");
       };
 
+      // Atualiza quantidade e remove o item se chegar a 0 ou menos
       const updateQuantity = (cartItemId, delta) => {
-        setCart(prev => prev.map(item => {
-          if (item.id === cartItemId) {
-            const newQ = item.quantity + delta;
-            return newQ > 0 ? { ...item, quantity: newQ } : item;
-          }
-          return item;
-        }));
+        setCart(prev => {
+          return prev.map(item => {
+            if (item.id === cartItemId) {
+              return { ...item, quantity: item.quantity + delta };
+            }
+            return item;
+          }).filter(item => item.quantity > 0);
+        });
       };
 
       const itemsTotal = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
