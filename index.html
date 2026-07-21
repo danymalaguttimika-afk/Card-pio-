@@ -13,19 +13,16 @@
   <style>
     ::-webkit-scrollbar { display: none; }
     * { -ms-overflow-style: none; scrollbar-width: none; -webkit-tap-highlight-color: transparent; }
-    @media print {
-      body * { visibility: hidden; }
-      #print-area, #print-area * { visibility: visible; color: black; }
-      #print-area { position: absolute; left: 0; top: 0; width: 80mm; padding: 2mm; background: white; font-family: monospace; font-size: 14px;}
-      .no-print { display: none !important; }
-    }
+    /* A regra de impressão foi melhorada e movida para as classes do Tailwind abaixo */
   </style>
 </head>
-<body class="bg-zinc-950 text-white selection:bg-amber-500 selection:text-white">
+<body class="bg-zinc-950 text-white selection:bg-amber-500 selection:text-white print:bg-white">
   
-  <div id="print-area" class="hidden"></div>
+  <!-- Área de Impressão (Fica invisível na tela, mas visível para a impressora) -->
+  <div id="print-area" class="hidden print:block w-full bg-white text-black font-mono p-2"></div>
   
-  <div id="root">
+  <!-- Aplicativo (Fica visível na tela, mas invisível para a impressora) -->
+  <div id="root" class="print:hidden">
     <div style="color: #f59e0b; text-align: center; padding: 50px; font-family: sans-serif;">
       <h2 style="font-weight: bold; font-size: 24px; margin-bottom: 10px;">Carregando...</h2>
       <p style="color: #a1a1aa; font-size: 14px;">Conectando ao banco de dados seguro...</p>
@@ -73,7 +70,11 @@
       
       const [customerName, setCustomerName] = useState("");
       const [customerPhone, setCustomerPhone] = useState("");
-      const [customerAddress, setCustomerAddress] = useState(""); // Novo campo Endereço
+      
+      const [street, setStreet] = useState("");
+      const [number, setNumber] = useState("");
+      const [neighborhood, setNeighborhood] = useState("");
+      const [reference, setReference] = useState("");
       
       const [activeCategory, setActiveCategory] = useState("Todos");
       const [pdvTab, setPdvTab] = useState('orders');
@@ -139,10 +140,17 @@
       const handleCheckout = async () => {
         if (cart.length === 0) return;
         if (!customerName.trim()) return alert("Por favor, insira seu nome.");
-        if (!customerPhone.trim()) return alert("Por favor, insira seu WhatsApp (número de telefone).");
-        if (!customerAddress.trim()) return alert("Por favor, insira seu endereço para entrega."); // Trava do endereço
+        if (!customerPhone.trim()) return alert("Por favor, insira seu WhatsApp.");
+        if (!street.trim()) return alert("Por favor, insira o nome da rua.");
+        if (!number.trim()) return alert("Por favor, insira o número.");
+        if (!neighborhood.trim()) return alert("Por favor, insira o bairro.");
 
-        let text = `*Novo Pedido - Malaguti Brothers*\n\n*Cliente:* ${customerName}\n*Telefone:* ${customerPhone}\n*Endereço:* ${customerAddress}\n\n*Itens:*\n`;
+        let addressText = `${street}, ${number} - ${neighborhood}`;
+        if (reference.trim()) {
+          addressText += ` (Ref: ${reference})`;
+        }
+
+        let text = `*Novo Pedido - Malaguti Brothers*\n\n*Cliente:* ${customerName}\n*Telefone:* ${customerPhone}\n*Endereço:* ${addressText}\n\n*Itens:*\n`;
         cart.forEach(item => {
           text += `${item.quantity}x ${item.name} - R$ ${(parseFloat(item.price) * item.quantity).toFixed(2)}\n`;
         });
@@ -151,11 +159,14 @@
         try {
           const { db, collection, addDoc } = window.firebaseAPI;
           await addDoc(collection(db, 'orders'), {
-            customerName, customerPhone, customerAddress, phone: WHATSAPP_NUMBER, items: cart, total: cartTotal, status: 'pendente', source: 'whatsapp', createdAt: Date.now()
+            customerName, customerPhone, customerAddress: addressText, phone: WHATSAPP_NUMBER, items: cart, total: cartTotal, status: 'pendente', source: 'whatsapp', createdAt: Date.now()
           });
           const waUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
           window.open(waUrl, '_blank');
-          setCart([]); setIsCartOpen(false); setCustomerName(""); setCustomerPhone(""); setCustomerAddress("");
+          
+          setCart([]); setIsCartOpen(false); 
+          setCustomerName(""); setCustomerPhone(""); 
+          setStreet(""); setNumber(""); setNeighborhood(""); setReference("");
         } catch (error) { alert("Erro ao gerar pedido."); }
       };
 
@@ -204,33 +215,44 @@
 
       const printOrder = (order) => {
         const printArea = document.getElementById('print-area');
+        
         let html = `
-          <div style="text-align: center; margin-bottom: 10px; border-bottom: 1px dashed black; padding-bottom: 10px;">
-            <h2 style="margin:0; font-size: 18px;">MALAGUTI BROTHERS</h2>
-            <p style="margin:0;">Pedido #${order.id.substring(0, 5).toUpperCase()}</p>
-            <p style="margin:0;">${new Date(order.createdAt).toLocaleString('pt-BR')}</p>
+          <div style="text-align: center; margin-bottom: 15px; border-bottom: 2px dashed #000; padding-bottom: 10px;">
+            <h2 style="margin:0; font-size: 22px; font-weight: bold;">MALAGUTI BROTHERS</h2>
+            <p style="margin:5px 0 0 0; font-size: 16px;">Pedido #${order.id.substring(0, 5).toUpperCase()}</p>
+            <p style="margin:2px 0 0 0; font-size: 14px;">${new Date(order.createdAt).toLocaleString('pt-BR')}</p>
           </div>
-          <div style="margin: 10px 0; border-bottom: 1px dashed black; padding-bottom: 10px;">
-            <p style="margin:2px 0;"><strong>Cliente:</strong> ${order.customerName}</p>
-            ${order.customerPhone ? `<p style="margin:2px 0;"><strong>Telefone:</strong> ${order.customerPhone}</p>` : ''}
-            ${order.customerAddress ? `<p style="margin:2px 0;"><strong>Endereço:</strong> ${order.customerAddress}</p>` : ''}
+          <div style="margin: 15px 0; border-bottom: 2px dashed #000; padding-bottom: 15px; font-size: 16px;">
+            <p style="margin:4px 0;"><strong>Cliente:</strong> ${order.customerName}</p>
+            ${order.customerPhone ? `<p style="margin:4px 0;"><strong>Tel:</strong> ${order.customerPhone}</p>` : ''}
+            ${order.customerAddress ? `<p style="margin:4px 0;"><strong>Endereço:</strong> ${order.customerAddress}</p>` : ''}
           </div>
-          <table style="width: 100%; margin: 10px 0;">
+          <table style="width: 100%; margin: 15px 0; font-size: 16px;">
         `;
+        
         order.items.forEach(item => {
-          html += `<tr><td style="vertical-align: top; width: 15%;"><strong>${item.quantity}x</strong></td><td style="vertical-align: top;">${item.name}</td><td style="text-align: right; vertical-align: top;">R$${(item.price * item.quantity).toFixed(2)}</td></tr>`;
+          html += `
+            <tr>
+              <td style="vertical-align: top; width: 15%; padding-bottom: 8px;"><strong>${item.quantity}x</strong></td>
+              <td style="vertical-align: top; padding-bottom: 8px;">${item.name}</td>
+              <td style="text-align: right; vertical-align: top; padding-bottom: 8px;">R$${(item.price * item.quantity).toFixed(2)}</td>
+            </tr>
+          `;
         });
+        
         html += `
           </table>
-          <div style="text-align: right; font-size: 16px; margin-top: 10px; border-top: 1px dashed black; padding-top: 10px;">
+          <div style="text-align: right; font-size: 18px; margin-top: 15px; border-top: 2px dashed #000; padding-top: 15px;">
             <strong>TOTAL: R$ ${order.total.toFixed(2)}</strong>
           </div>
         `;
+        
         printArea.innerHTML = html;
         
+        // Aumentei o tempo de espera para garantir que o celular consiga gerar a notinha antes de abrir a tela de impressão
         setTimeout(() => {
           window.print();
-        }, 300);
+        }, 500);
       };
 
       if (loading) return <div className="min-h-screen flex items-center justify-center font-bold text-amber-500 animate-pulse">Conectando ao banco de dados...</div>;
@@ -239,7 +261,7 @@
       const filteredProducts = activeCategory === 'Todos' ? products : products.filter(p => p.category === activeCategory);
 
       return (
-        <div className="min-h-screen relative pb-20 w-full overflow-x-hidden font-sans no-print">
+        <div className="min-h-screen relative pb-20 w-full overflow-x-hidden font-sans">
           
           <div className="fixed top-2 right-2 z-50 bg-zinc-800/80 p-1 rounded-full flex gap-1 border border-zinc-700 shadow-xl backdrop-blur-md">
             <button onClick={() => setView('menu')} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase transition-colors ${view === 'menu' ? 'bg-amber-500 text-black' : 'text-zinc-400'}`}>Cardápio</button>
@@ -349,11 +371,17 @@
                       ))}
                     </div>
                     
-                    {/* Campos de Nome, Telefone e Endereço do Cliente */}
                     <div className="p-6 bg-zinc-950 border-t border-zinc-800 rounded-t-3xl">
                       <input type="text" value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Seu nome" className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl px-5 py-3 text-white mb-3" />
-                      <input type="tel" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="Seu WhatsApp (Ex: 11999999999)" className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl px-5 py-3 text-white mb-3" />
-                      <input type="text" value={customerAddress} onChange={(e) => setCustomerAddress(e.target.value)} placeholder="Endereço para entrega" className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl px-5 py-3 text-white mb-4" />
+                      <input type="tel" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="WhatsApp (Ex: 11999999999)" className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl px-5 py-3 text-white mb-3" />
+                      
+                      <div className="flex gap-2 mb-3">
+                        <input type="text" value={street} onChange={(e) => setStreet(e.target.value)} placeholder="Rua" className="flex-1 bg-zinc-900 border border-zinc-700 rounded-2xl px-5 py-3 text-white" />
+                        <input type="text" value={number} onChange={(e) => setNumber(e.target.value)} placeholder="Nº" className="w-24 bg-zinc-900 border border-zinc-700 rounded-2xl px-4 py-3 text-white text-center" />
+                      </div>
+                      
+                      <input type="text" value={neighborhood} onChange={(e) => setNeighborhood(e.target.value)} placeholder="Bairro" className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl px-5 py-3 text-white mb-3" />
+                      <input type="text" value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Referência (Opcional)" className="w-full bg-zinc-900 border border-zinc-700 rounded-2xl px-5 py-3 text-white mb-4" />
                       
                       <button onClick={handleCheckout} className="w-full bg-[#25D366] text-white py-4 rounded-2xl font-black text-lg flex items-center justify-center gap-3">
                         💬 Enviar Pedido
