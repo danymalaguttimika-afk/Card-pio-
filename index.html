@@ -160,9 +160,27 @@
           setNewCategoryInput("");
         } catch (error) { alert("Erro ao adicionar categoria."); }
       };
+      
+      // Função para criar categoria rápida direto no modal de produto
+      const handleQuickAddCategory = async () => {
+        const catName = prompt("Digite o nome da nova categoria:");
+        if (!catName || !catName.trim()) return;
+        const name = catName.trim();
+        if (customCategories.includes(name)) {
+            setNewProduct({...newProduct, category: name});
+            return;
+        }
+        
+        const updatedList = [...customCategories, name];
+        try {
+          const { db, doc, setDoc } = window.firebaseAPI;
+          await setDoc(doc(db, 'settings', 'categories'), { list: updatedList }, { merge: true });
+          setNewProduct({...newProduct, category: name}); // Já seleciona a categoria nova
+        } catch (error) { alert("Erro ao criar categoria."); }
+      };
 
       const handleDeleteCategory = async (catToDelete) => {
-        if (!window.confirm(`Atenção: Tem certeza que deseja excluir a categoria "${catToDelete}"?\n\nOs produtos cadastrados nela não serão apagados, mas ficarão sem categoria até você editá-los.`)) return;
+        if (!window.confirm(`Atenção: Tem certeza que deseja excluir a categoria "${catToDelete}"?\n\nOs produtos nela não serão apagados, mas ficarão sem categoria até você editá-los.`)) return;
         const updatedList = customCategories.filter(c => c !== catToDelete);
         try {
           const { db, doc, setDoc } = window.firebaseAPI;
@@ -594,7 +612,7 @@
                     {/* Ajuste de Taxa de Entrega */}
                     <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200">
                       <h3 className="font-black text-xl mb-2">⚙️ Taxa de Entrega</h3>
-                      <p className="text-xs text-zinc-500 mb-6">Defina o valor da taxa que será somada automaticamente em todos os pedidos dos clientes.</p>
+                      <p className="text-xs text-zinc-500 mb-6">Defina o valor da taxa que será somada automaticamente em todos os pedidos.</p>
                       <form onSubmit={handleSaveFee} className="space-y-4">
                         <div>
                           <label className="block text-xs font-bold text-zinc-600 uppercase mb-2">Valor Atual (R$)</label>
@@ -607,13 +625,8 @@
                     {/* Gerenciador de Categorias */}
                     <div className="bg-white rounded-3xl p-6 shadow-sm border border-zinc-200">
                       <h3 className="font-black text-xl mb-2">📂 Categorias</h3>
-                      <p className="text-xs text-zinc-500 mb-6">Adicione novas categorias ao seu cardápio ou remova as que não usa mais.</p>
+                      <p className="text-xs text-zinc-500 mb-6">Exclua as categorias antigas clicando na lixeira.</p>
                       
-                      <form onSubmit={handleAddCategory} className="flex gap-2 mb-4">
-                        <input type="text" value={newCategoryInput} onChange={(e) => setNewCategoryInput(e.target.value)} className="flex-1 bg-zinc-50 border border-zinc-300 rounded-2xl px-4 py-3" placeholder="Nova Categoria" required />
-                        <button type="submit" className="bg-zinc-900 text-white font-black px-6 rounded-2xl">➕</button>
-                      </form>
-
                       <div className="space-y-2 mt-4">
                         {customCategories.map(cat => (
                           <div key={cat} className="flex justify-between items-center bg-zinc-50 p-3 rounded-2xl border border-zinc-200">
@@ -635,19 +648,22 @@
                       <button onClick={() => setIsAddProductModalOpen(false)}>✖️</button>
                     </div>
                     <form className="flex-1 overflow-y-auto space-y-4">
-                      <input required type="text" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="Nome" />
-                      <input required type="number" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="Preço (Apenas números)" />
+                      <input required type="text" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="Nome do Produto" />
                       
-                      {/* O Select agora puxa as categorias direto do banco de dados */}
-                      <select value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4">
-                        {customCategories.length === 0 && <option value="">Crie uma categoria primeiro</option>}
-                        {customCategories.map(cat => (
-                          <option key={cat} value={cat}>{cat}</option>
-                        ))}
-                      </select>
+                      <div className="flex gap-2">
+                          <select value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="flex-1 bg-zinc-50 border border-zinc-200 rounded-2xl p-4">
+                            {customCategories.length === 0 && <option value="">Sem categoria</option>}
+                            {customCategories.map(cat => (
+                              <option key={cat} value={cat}>{cat}</option>
+                            ))}
+                          </select>
+                          <button type="button" onClick={handleQuickAddCategory} className="bg-amber-500 text-zinc-950 font-black px-4 rounded-2xl whitespace-nowrap">➕ Nova</button>
+                      </div>
 
-                      <input type="url" value={newProduct.imageUrl} onChange={e => setNewProduct({...newProduct, imageUrl: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="URL da Imagem (Opcional)" />
-                      <textarea value={newProduct.description} onChange={e => setNewProduct({...newProduct, description: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4 h-24" placeholder="Ingredientes / Descrição"></textarea>
+                      <input required type="number" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="Preço" />
+                      
+                      <input type="url" value={newProduct.imageUrl} onChange={e => setNewProduct({...newProduct, imageUrl: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4" placeholder="URL da Foto (Opcional)" />
+                      <textarea value={newProduct.description} onChange={e => setNewProduct({...newProduct, description: e.target.value})} className="w-full bg-zinc-50 border border-zinc-200 rounded-2xl p-4 h-24" placeholder="Descrição / Ingredientes"></textarea>
                     </form>
                     <button onClick={handleAddProduct} className="w-full bg-zinc-900 text-white font-black py-4 rounded-2xl mt-4">Salvar Produto</button>
                   </div>
