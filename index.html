@@ -49,7 +49,6 @@
         db: getFirestore(app),
         collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, setDoc
       };
-      // Dispara o evento avisando o React que o Firebase está pronto
       window.dispatchEvent(new Event('firebase-ready'));
     } catch (e) {
       console.error("Erro ao inicializar Firebase:", e);
@@ -80,10 +79,9 @@
       }
     };
 
-    // --- COMPONENTE PRINCIPAL (SÓ RODA SE O FIREBASE ESTIVER PRONTO) ---
     function MainApp() {
       const [view, setView] = useState('menu');
-      const [userRole, setUserRole] = useState(null); // 'admin' ou 'operator'
+      const [userRole, setUserRole] = useState(null); 
 
       const [products, setProducts] = useState([]);
       const [orders, setOrders] = useState([]);
@@ -93,7 +91,9 @@
       const [storeOpen, setStoreOpen] = useState(true);
       const [deliveryFee, setDeliveryFee] = useState(5.00);
       const [pixKeyConfig, setPixKeyConfig] = useState("11999999999 (Chave Pix Exemplo)");
-      const [customCategories, setCustomCategories] = useState(['Burgers', 'Porções', 'Bebidas', 'Sobremesas']);
+      
+      // Categorias padronizadas com a nova sequência
+      const [customCategories, setCustomCategories] = useState(['Lanche', 'Lanche Gourmet', 'Bebidas', 'Sobremesas']);
       const [addons, setAddons] = useState([]);
       const [motoboys, setMotoboys] = useState([]);
       
@@ -229,7 +229,7 @@
 
         const unsubCats = onSnapshot(doc(db, 'settings', 'categories'), (docSnap) => {
           if (docSnap.exists()) {
-            setCustomCategories(docSnap.data().list || ['Burgers', 'Porções', 'Bebidas', 'Sobremesas']);
+            setCustomCategories(docSnap.data().list || ['Lanche', 'Lanche Gourmet', 'Bebidas', 'Sobremesas']);
           }
         }, (err) => console.error(err));
 
@@ -241,7 +241,6 @@
           if (docSnap.exists()) setMotoboys(docSnap.data().list || []);
         });
 
-        // Libera a tela de Loading após ativar os bancos de dados
         setTimeout(() => { setLoading(false); }, 800);
 
         return () => {
@@ -675,9 +674,23 @@
         setTimeout(() => { iframe.contentWindow.focus(); iframe.contentWindow.print(); }, 500);
       };
 
-      if (loading) return null; // A tela inicial HTML cuida do carregamento visual
 
-      const displayCategories = ['Todos', ...customCategories];
+      // --- LÓGICA DE ORDENAÇÃO DE CATEGORIAS ---
+      const predefinedCatOrder = ['Lanche', 'Lanche Gourmet', 'Bebidas', 'Sobremesas'];
+      
+      const sortedCustomCategories = [...customCategories].sort((a, b) => {
+        const indexA = predefinedCatOrder.indexOf(a);
+        const indexB = predefinedCatOrder.indexOf(b);
+        
+        if (indexA !== -1 && indexB !== -1) return indexA - indexB; // Ambas são padrão
+        if (indexA !== -1) return -1; // Só A é padrão (vem primeiro)
+        if (indexB !== -1) return 1;  // Só B é padrão (vem primeiro)
+        return 0; // Novas categorias mantêm a ordem no final
+      });
+
+      // "Todos" isolado no fim da lista
+      const displayCategories = [...sortedCustomCategories, 'Todos'];
+
       const filteredProducts = (activeCategory === 'Todos' ? products : products.filter(p => p.category === activeCategory))
         .filter(p => !p.paused);
 
@@ -707,6 +720,11 @@
 
       const closedCashRegisters = cashRegisters.filter(c => c.status === 'fechado');
       const monthlyRevenue = closedCashRegisters.reduce((acc, c) => acc + (c.totalSales || 0), 0);
+
+      const productSalesCount = {};
+      activeSessionOrdersValid.forEach(o => {
+        if (o.items) { o.items.forEach(item => { productSalesCount[item.name] = (productSalesCount[item.name] || 0) + item.quantity; }); }
+      });
 
       const filteredOrdersForAnalysis = orders.filter(o => {
         if (!analysisStartDate && !analysisEndDate) return true;
@@ -1590,7 +1608,7 @@
                         </div>
                         
                         <div>
-                          <label className="block text-xs font-bold text-zinc-600 uppercase mb-1">Mensagem de "Saiu para Entrega"</label>
+                          <label className="block text-xs font-bold text-zinc-600 uppercase mb-1">Mensagem de "Saiu para Entrega" (WhatsApp)</label>
                           <textarea value={dispatchMsgInput} onChange={(e) => setDispatchMsgInput(e.target.value)} className="w-full bg-zinc-50 border border-zinc-300 rounded-2xl px-4 py-3 text-xs h-20 text-zinc-800" required />
                           <p className="text-[10px] text-zinc-500 mt-1">Use a tag <strong>[Nome]</strong> para incluir o nome do cliente automaticamente.</p>
                         </div>
@@ -1607,7 +1625,7 @@
                                <input type="text" value={operatorPassInput} onChange={(e) => setOperatorPassInput(e.target.value)} className="w-full bg-zinc-50 border border-zinc-300 rounded-xl px-3 py-2 text-xs font-bold" required />
                              </div>
                            </div>
-                           <p className="text-[10px] text-zinc-500 leading-tight">O Operador tem acesso apenas à gestão de Pedidos e Cardápio.</p>
+                           <p className="text-[10px] text-zinc-500 leading-tight">O Operador tem acesso apenas à gestão de Pedidos e Cardápio (sem acesso ao Caixa e Análises).</p>
                         </div>
 
                         <button type="submit" className="w-full bg-zinc-900 text-white font-black py-3 rounded-2xl shadow-md">Salvar Alterações</button>
@@ -1742,7 +1760,7 @@
       );
     }
     
-    // --- WRAPPER DE SEGURANÇA CONTRA TRAVAMENTO ---
+    // O sistema só monta a tela depois que tiver certeza que conectou
     function App() {
       const [firebaseReady, setFirebaseReady] = useState(!!window.firebaseAPI);
       
@@ -1756,10 +1774,7 @@
         }
       }, []);
 
-      // Se não estiver pronto, não tenta renderizar nada (deixa a tela em HTML puro rodando)
-      if (!firebaseReady) {
-        return null; 
-      }
+      if (!firebaseReady) return null; 
       return <MainApp />;
     }
 
