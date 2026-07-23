@@ -365,7 +365,12 @@
         if (!currentCash) return;
         if (!window.confirm("Deseja realmente fechar o caixa do dia?")) return;
 
-        const sessionOrders = orders.filter(o => o.createdAt >= currentCash.openedAt && o.status !== 'cancelado');
+        // Ao fechar, garante que puxa os mesmos pedidos computados na sessão
+        const closedCashList = cashRegisters.filter(c => c.status === 'fechado');
+        const lastClosedTime = closedCashList.length > 0 ? Math.max(...closedCashList.map(c => c.closedAt)) : new Date().setHours(0,0,0,0);
+        
+        const sessionOrders = orders.filter(o => o.createdAt > lastClosedTime && o.status !== 'cancelado');
+        
         const totalSales = sessionOrders.reduce((acc, o) => acc + (o.total || 0), 0);
         const pixSales = sessionOrders.filter(o => o.paymentMethod === 'Pix').reduce((acc, o) => acc + (o.total || 0), 0);
         const cardSales = sessionOrders.filter(o => o.paymentMethod === 'Cartão').reduce((acc, o) => acc + (o.total || 0), 0);
@@ -553,8 +558,9 @@
         } catch (error) { console.error(error); }
       };
 
+      // BOTÃO DE EXCLUIR TESTES DEFINITIVAMENTE DO BANCO DE DADOS
       const handleDeleteOrder = async (id) => {
-        if (!window.confirm("Atenção! Deseja apagar permanentemente este pedido?")) return;
+        if (!window.confirm("APAGAR DEFINITIVAMENTE?\n\nIsso vai excluir o pedido do banco de dados e limpar suas métricas (Ideal para apagar testes).")) return;
         const { db, doc, deleteDoc } = window.firebaseAPI;
         await deleteDoc(doc(db, 'orders', id));
       };
@@ -690,10 +696,15 @@
       const filteredProducts = (activeCategory === 'Todos' ? products : products.filter(p => p.category === activeCategory))
         .filter(p => !p.paused);
 
-      const startOfDayMs = new Date().setHours(0,0,0,0);
-      const pdvDisplayOrders = orders.filter(o => o.createdAt >= startOfDayMs);
+      // CÁLCULO INTELIGENTE DO CAIXA: Puxa desde o momento em que o último caixa foi fechado
+      const closedCashRegistersList = cashRegisters.filter(c => c.status === 'fechado');
+      const lastClosedTime = closedCashRegistersList.length > 0 ? Math.max(...closedCashRegistersList.map(c => c.closedAt)) : new Date().setHours(0,0,0,0);
 
-      const activeSessionOrdersValid = currentCash ? orders.filter(o => o.createdAt >= currentCash.openedAt && o.status !== 'cancelado') : [];
+      const pdvDisplayOrders = orders.filter(o => o.createdAt >= new Date().setHours(0,0,0,0));
+
+      // As vendas do caixa agora absorvem qualquer pedido feito no "limbo" enquanto o caixa estava fechado!
+      const activeSessionOrdersValid = currentCash ? orders.filter(o => o.createdAt > lastClosedTime && o.status !== 'cancelado') : [];
+      
       const sessionTotal = activeSessionOrdersValid.reduce((acc, o) => acc + (o.total || 0), 0);
       const sessionPix = activeSessionOrdersValid.filter(o => o.paymentMethod === 'Pix').reduce((acc, o) => acc + (o.total || 0), 0);
       const sessionCard = activeSessionOrdersValid.filter(o => o.paymentMethod === 'Cartão').reduce((acc, o) => acc + (o.total || 0), 0);
@@ -719,7 +730,6 @@
 
       const filteredOrdersForAnalysis = orders.filter(o => {
         if (!analysisStartDate && !analysisEndDate) return true;
-        // Fix de timezone inserido para evitar bugs de fuso horário à noite
         const d = new Date(o.createdAt);
         const orderDateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         
@@ -1159,8 +1169,8 @@
                               <button onClick={() => handleCancelOrder(order.id)} className="w-12 h-12 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center text-xl" title="Cancelar Pedido">🚫</button>
                             )}
                             
-                            {order.status === 'cancelado' && userRole === 'admin' && (
-                              <button onClick={() => handleDeleteOrder(order.id)} className="w-12 h-12 bg-zinc-100 text-zinc-400 hover:text-red-500 rounded-2xl flex items-center justify-center text-xl" title="Apagar Definitivamente">🗑️</button>
+                            {userRole === 'admin' && (
+                              <button onClick={() => handleDeleteOrder(order.id)} className="w-12 h-12 bg-zinc-100 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-2xl flex items-center justify-center text-xl transition-colors" title="Apagar Definitivamente (Limpa as Métricas)">🗑️</button>
                             )}
 
                             {order.status === 'pendente' && <button onClick={() => handleUpdateOrderStatus(order.id, 'preparando')} className="flex-1 bg-amber-500 font-black rounded-2xl">Preparar</button>}
@@ -1754,6 +1764,7 @@
       );
     }
     
+    // O sistema só monta a tela depois que tiver certeza que conectou
     function App() {
       const [firebaseReady, setFirebaseReady] = useState(!!window.firebaseAPI);
       
