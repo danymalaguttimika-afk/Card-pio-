@@ -18,7 +18,7 @@
 <body class="bg-zinc-950 text-white selection:bg-amber-500 selection:text-white">
   
   <div id="root">
-    <!-- Esta tela só some quando o Firebase estiver 100% conectado -->
+    <!-- Tela de Carregamento Segura -->
     <div style="color: #f59e0b; text-align: center; padding: 50px; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0;">
       <h2 style="font-weight: 900; font-size: 28px; margin-bottom: 10px;">MALAGUTI BROTHERS</h2>
       <p style="color: #a1a1aa; font-size: 14px; animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;">Iniciando conexão segura...</p>
@@ -30,6 +30,7 @@
     import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
     import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 
+    // Chaves oficiais da Malaguti Brothers
     const firebaseConfig = {
       apiKey: "AIzaSyAzCDS15N2e8hdP5wrQEzDNvZKBOAdeYjw",
       authDomain: "malaguti-brothers.firebaseapp.com",
@@ -58,6 +59,8 @@
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
     const WHATSAPP_NUMBER = "5511999999999"; 
+    
+    // Logo clássica em formato de hambúrguer
     const LOGO_URL = "https://cdn-icons-png.flaticon.com/512/3014/3014491.png"; 
 
     const playBeep = () => {
@@ -92,7 +95,6 @@
       const [deliveryFee, setDeliveryFee] = useState(5.00);
       const [pixKeyConfig, setPixKeyConfig] = useState("11999999999 (Chave Pix Exemplo)");
       
-      // Categorias padronizadas com a nova sequência
       const [customCategories, setCustomCategories] = useState(['Lanche', 'Lanche Gourmet', 'Bebidas', 'Sobremesas']);
       const [addons, setAddons] = useState([]);
       const [motoboys, setMotoboys] = useState([]);
@@ -152,7 +154,6 @@
       const viewRef = useRef(view);
       useEffect(() => { viewRef.current = view; }, [view]);
 
-      // CARREGAMENTO DE DADOS PRINCIPAL
       useEffect(() => {
         try {
           const savedDataStr = localStorage.getItem('malaguti_customer_data');
@@ -248,7 +249,6 @@
         };
       }, []);
 
-      // TRACKER AO VIVO DO CLIENTE
       useEffect(() => {
         if (!trackedOrderId) {
           setTrackedOrder(null);
@@ -674,21 +674,17 @@
         setTimeout(() => { iframe.contentWindow.focus(); iframe.contentWindow.print(); }, 500);
       };
 
-
-      // --- LÓGICA DE ORDENAÇÃO DE CATEGORIAS ---
       const predefinedCatOrder = ['Lanche', 'Lanche Gourmet', 'Bebidas', 'Sobremesas'];
       
       const sortedCustomCategories = [...customCategories].sort((a, b) => {
         const indexA = predefinedCatOrder.indexOf(a);
         const indexB = predefinedCatOrder.indexOf(b);
-        
-        if (indexA !== -1 && indexB !== -1) return indexA - indexB; // Ambas são padrão
-        if (indexA !== -1) return -1; // Só A é padrão (vem primeiro)
-        if (indexB !== -1) return 1;  // Só B é padrão (vem primeiro)
-        return 0; // Novas categorias mantêm a ordem no final
+        if (indexA !== -1 && indexB !== -1) return indexA - indexB; 
+        if (indexA !== -1) return -1; 
+        if (indexB !== -1) return 1;  
+        return 0; 
       });
 
-      // "Todos" isolado no fim da lista
       const displayCategories = [...sortedCustomCategories, 'Todos'];
 
       const filteredProducts = (activeCategory === 'Todos' ? products : products.filter(p => p.category === activeCategory))
@@ -721,14 +717,12 @@
       const closedCashRegisters = cashRegisters.filter(c => c.status === 'fechado');
       const monthlyRevenue = closedCashRegisters.reduce((acc, c) => acc + (c.totalSales || 0), 0);
 
-      const productSalesCount = {};
-      activeSessionOrdersValid.forEach(o => {
-        if (o.items) { o.items.forEach(item => { productSalesCount[item.name] = (productSalesCount[item.name] || 0) + item.quantity; }); }
-      });
-
       const filteredOrdersForAnalysis = orders.filter(o => {
         if (!analysisStartDate && !analysisEndDate) return true;
-        const orderDateStr = new Date(o.createdAt).toISOString().split('T')[0];
+        // Fix de timezone inserido para evitar bugs de fuso horário à noite
+        const d = new Date(o.createdAt);
+        const orderDateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        
         if (analysisStartDate && orderDateStr < analysisStartDate) return false;
         if (analysisEndDate && orderDateStr > analysisEndDate) return false;
         return true;
@@ -1760,7 +1754,6 @@
       );
     }
     
-    // O sistema só monta a tela depois que tiver certeza que conectou
     function App() {
       const [firebaseReady, setFirebaseReady] = useState(!!window.firebaseAPI);
       
